@@ -63,7 +63,7 @@ The renderer must accurately produce the following visual phenomena:
 
 These physical parameters, combined with the laws of physics and geometry, give rise to the visual phenomena described above. All calculations must use `float64` precision for the following constants.
 
-#### 3.1.1 The Ring Structure
+#### 3.1.1 The Ring structure
 | Parameter | Symbol | Value | Unit |
 | :--- | :--- | :--- | :--- |
 | **Radius** | $R$ | $92,955,807.0$ | miles (1 AU) |
@@ -86,16 +86,17 @@ These physical parameters, combined with the laws of physics and geometry, give 
 #### 3.1.3 The Shadow Square Assembly
 | Parameter | Symbol | Value | Unit |
 | :--- | :--- | :--- | :--- |
-| **Square Count** | $N$ | $20$ | units |
-| **Orbital Radius** | $R_{ss}$ | $14,502,514$ | miles |
-| **Square Width** | $L_{ss}$ | $11,829,464$ | miles |
-| **Square Height** | $H_{ss}$ | $1,000,000$ | miles |
-| **Orbital Velocity** | $v_{ss}$ | $46.9$ | miles/sec |
+| **Square Count** | $N$ | $8$ | units |
+| **Orbital Radius** | $R_{ss}$ | $36,571,994$ | miles |
+| **Square Width** | $L_{ss}$ | $14,360,000$ | miles |
+| **Square Height** | $H_{ss}$ | $1,200,000$ | miles |
+| **Orbital Direction**| - | **Retrograde** | - |
+| **Solar Day** | $T_{day}$ | $24.0$ | hours |
 
-**Day/Night Definition:** For equal time in day vs. night, illumination is classified as:
-- **Night** (0-50% solar illumination): Full umbra + first half of penumbra
-- **Day** (50-100% solar illumination): Full sunlight + second half of penumbra
-- **Twilight periods**: Each sunrise and sunset lasts 1.0 hour
+**Day/Night Definition:** Optimized for a 24-hour cycle:
+- **Night** (0-50% solar illumination): 12.0 hours
+- **Day** (50-100% solar illumination): 12.0 hours
+- **Twilight periods**: Each sunrise and sunset lasts ~26.3 minutes
 
 ### 3.2 Observer Specification
 * **Standard Eye Height ($h$):** $0.00189394$ miles ($10.0$ feet)
@@ -112,12 +113,12 @@ The combination of these parameters with fundamental geometry and physics produc
 - The 1 AU radius and observer eye height create the **Upward Horizon** effect through cylindrical geometry
 - The Earth-like terrain at 10-foot eye height provides **Grounded Contextualization** with familiar scale references
 - The 100-mile atmospheric ceiling and Rayleigh scattering ($1/\lambda^4$) produce the **Atmospheric Blue-Out** across thousands of miles of viewing distance
-- The 20 Shadow Squares (11.83M miles wide × 1M miles tall) orbiting at 14.50M miles at 46.9 miles/sec create moving **Night Walls** lasting 5.27 hours each, with 1-hour **sunrise and sunset** transitions
-- The shadow square height (1M miles) exceeds the Sun's diameter (865k miles), creating true **umbra** (full darkness) at the Ring surface
-- The 50% shadow coverage (with symmetric twilight definition) produces equal day/night periods and enables the **Emergent Night-Sky**
+- The 8 Shadow Squares orbiting retrograde at 36.57M miles create moving **Night Walls** resulting in a **24-hour solar day**, with ~26.3 minute **sunrise and sunset** transitions
+- The shadow square height (1.2M miles) ensures full coverage of the Sun's diameter from the retrograde orbital distance
+- The retrograde velocity shears the penumbra faster, compressing twilight into the 20-40 minute target window
 - The 50% sunlit surface area at any instant produces **Ring-shine** illumination on the night side (though ~97% of the visible overhead Arch is illuminated when viewed from night side)
 - The 1,000-mile Rim Walls at ±500,000 miles lateral distance create the visible **Rim Wall** features framing the world
-- The Sun's 0.53° angular diameter creates 5.54M mile wide penumbral zones with soft shadow edges and **Light Columns** visible in atmospheric haze
+- The Sun's 0.53° angular diameter creates 1.34-million-mile-wide penumbral zones with soft shadow edges and **Light Columns** visible in atmospheric haze
 - The shadow state combined with atmospheric scattering produces **Volumetric Shadowing** where air itself appears shadowed
 
 ## 4. Engineering Constraints & Requirements
@@ -153,11 +154,11 @@ To accurately render the target visual phenomena, the implementation must achiev
    - Dynamic sky color responding to observer shadow state
 
 3. **Shadow Accuracy**
-   - Angular modulo calculations for 20 shadow squares distributed around the ring
-   - Penumbra softening based on $0.53°$ solar angular diameter creating 5.54M mile penumbral zones
-   - Temporal synchronization preventing positional drift at 46.9 miles/sec orbital velocity
+   - Angular modulo calculations for 8 shadow squares distributed around the ring
+   - Penumbra softening based on $0.53°$ solar angular diameter creating 1.34M mile penumbral zones
+   - Temporal synchronization preventing positional drift in retrograde orbital synchronization
    - Shadow state evaluation for both surface illumination and atmospheric volume
-   - Linear angular interpolation creating natural 1-hour sunrise/sunset transitions
+   - Linear angular interpolation creating natural ~26.3-minute sunrise/sunset transitions
 
 4. **Terrain Generation**
    - Seamless procedural noise across $2\pi$ angular wrapping (no visible seam at $\theta = 0/2\pi$)
@@ -244,7 +245,7 @@ This table explicitly connects each visual phenomenon to its physical basis and 
 | **Upward Horizon** | 1 AU radius cylindrical geometry, 10-foot eye height | Observer-centric coordinates, Delta-R intersection solver, continuous ground-to-Arch solution |
 | **Grounded Contextualization** | 10-foot eye height, local terrain variation | Procedural terrain displacement via multi-octave noise, radial distance modulation |
 | **Atmospheric Blue-Out** | 100-mile ceiling, Rayleigh scattering ($1/\lambda^4$), $\tau_{zenith}=0.06$ | Single-pass volume integration, airmass calculation, exponential transmittance |
-| **Night Walls & Light Columns** | 20 shadow squares, $L_{ss}=11.83M$ mi, $H_{ss}=1M$ mi, $v_{ss}=46.9$ mi/sec, orbiting at $R_{ss}=14.50M$ mi | Angular modulo calculation, absolute epoch time accumulation, penumbra softening ($\sigma=0.53°$), 1-hour twilight transitions |
+| **Night Walls & Light Columns** | 8 shadow squares, retrograde orbit, $R_{ss}=36.57M$ mi, $v_{rel} \approx 844$ mi/sec | Angular modulo calculation, absolute epoch time accumulation, penumbra softening ($\sigma=0.53°$), ~26.3-min twilight transitions |
 | **Ring-shine** | 50% sunlit surface area at any instant, but ~97% of overhead Arch visible from night side is illuminated | Constant-hemisphere ambient term scaled by visible illuminated Arch area |
 | **Rim Walls** | $H_w=1,000$ mi at $z=±500,000$ mi lateral distance | Continuous geometric solution, numerical precision at all scales, observer-centric frame |
 | **Volumetric Shadowing** | Shadow state + atmospheric scattering interaction | Shadow-sky coupling, step-function shadow integration, in-scattering term modulation |
@@ -276,10 +277,10 @@ This table explicitly connects each visual phenomenon to its physical basis and 
     * **Why not:** While libraries like GMP or MPFR can perform calculations with arbitrary precision, they are orders of magnitude slower than native `float64` operations. The performance cost would make real-time rendering impossible.
 
 ### 6.3 Night-Day Modulation: Angular Shadow State
-* **Problem to Solve:** Determining if a given point on the Ring is in sunlight or shadow cast by one of the 20 Shadow Squares.
+* **Problem to Solve:** Determining if a given point on the Ring is in sunlight or shadow cast by one of the 8 Shadow Squares.
 * **Importance:** The "Night Walls" are a defining visual feature. Without accurate shadow determination, the day/night cycle would be incorrect, breaking immersion.
 * **Selected Approach: Angular Modulo with Epoch Time.**
-    * **Description:** We calculate the angular position $\theta$ of the point on the ring. We then compute the angular positions of all 20 shadow squares as a function of the current time $T_{total}$. If $\theta$ falls within the angular span of any shadow square (accounting for the square's length and orbital radius), the point is in shadow.
+    * **Description:** We calculate the angular position $\theta$ of the point on the ring. We then compute the angular positions of all 8 shadow squares as a function of the current time $T_{total}$. If $\theta$ falls within the angular span of any shadow square (accounting for the square's length and orbital radius), the point is in shadow.
     * **How it solves the problem:** It provides an exact, deterministic answer for the shadow state of any point at any time. The modulo operation ensures that the shadow squares "wrap around" the ring correctly.
     * **Why we selected it:** It is computationally cheap (a single modulo and comparison per shadow square) and avoids the need for shadow mapping or ray-traced occlusion queries.
 * **Considered & Discarded: Shadow Mapping / Ray-Traced Occlusion.**
@@ -312,7 +313,7 @@ This table explicitly connects each visual phenomenon to its physical basis and 
 
 ### 7.1 Absolute Epoch Accumulation
 * **Problem to Solve:** Maintaining synchronized motion of shadow squares and ring rotation over long durations without floating-point drift.
-* **Importance:** At $46.9$ miles/s, a $0.0001$ deviation in time accumulation results in 0.0047 miles (25 feet) of positional error. Over extended simulation runs, incremental time updates (`position += velocity * delta_t`) accumulate rounding errors that cause the shadow squares to drift out of sync with the ring's rotation.
+* **Importance:** At the determined retrograde velocity, a $0.0001$ deviation in time accumulation results in significant positional error. Over extended simulation runs, incremental time updates (`position += velocity * delta_t`) accumulate rounding errors that cause the shadow squares to drift out of sync with the ring's rotation.
 * **Selected Approach: Absolute Epoch Accumulation.**
     * **Description:** All positions are calculated as a function of $T_{total}$ (double precision seconds since start). $T=0$ defines a "High Noon" alignment at the observer's longitude. At any moment, the angular position of shadow square $i$ is computed as:
       $$
@@ -324,23 +325,23 @@ This table explicitly connects each visual phenomenon to its physical basis and 
 
 ### 7.2 Day/Night Cycle Definition
 * **Problem to Solve:** Defining the boundary between "day" and "night" such that they occupy equal durations, while accounting for the gradual penumbra transition.
-* **Importance:** The penumbra creates a 1-hour twilight zone during both sunrise and sunset. We must decide how to classify these intermediate illumination states to achieve the desired 50/50 day/night balance.
+* **Importance:** The penumbra creates a ~26.3-minute twilight zone during both sunrise and sunset. We must decide how to classify these intermediate illumination states to achieve the desired 50/50 day/night balance.
 * **Selected Approach: Symmetric Twilight Split.**
     * **Description:** We define illumination states based on the percentage of direct solar illumination:
         * **Night** (0-50% illumination): Full umbra (0%) + first half of penumbra (0-50%)
         * **Day** (50-100% illumination): Second half of penumbra (50-100%) + full sunlight (100%)
-        * **Sunrise**: 1-hour transition from 0% to 100% illumination
-        * **Sunset**: 1-hour transition from 100% to 0% illumination
-    * **How it solves the problem:** By splitting the penumbra symmetrically at the 50% illumination point, we ensure that "night" and "day" each occupy exactly 5.27 hours of the 10.53-hour cycle. The observer experiences 4.27 hours of full darkness, 1 hour of sunrise, 4.27 hours of full daylight, and 1 hour of sunset.
+        * **Sunrise**: ~26.3-minute transition from 0% to 100% illumination
+        * **Sunset**: ~26.3-minute transition from 100% to 0% illumination
+    * **How it solves the problem:** By splitting the penumbra symmetrically at the 50% illumination point, we ensure that "night" and "day" each occupy exactly 12.0 hours. 
     * **Why we selected it:** It provides a physically meaningful and perceptually natural definition. The 50% illumination threshold corresponds approximately to the subjective boundary between "dark" and "light" conditions. It also ensures mathematical equality: night duration = day duration = 50% of cycle time.
 * **Timing Summary:**
-    * Full darkness (umbra): 4.27 hours
-    * Sunrise (0% → 50% → 100%): 1.00 hour
-    * Full daylight: 4.27 hours
-    * Sunset (100% → 50% → 0%): 1.00 hour
-    * **Night** (umbra + dawn twilight): 5.27 hours
-    * **Day** (bright twilight + full light): 5.27 hours
-    * Complete cycle: 10.53 hours (~2.28 cycles per 24 hours)
+    * Full darkness (umbra): 11.12 hours
+    * Sunrise (0% → 50% → 100%): 0.44 hours (26.3 min)
+    * Full daylight: 11.12 hours
+    * Sunset (100% → 50% → 0%): 0.44 hours (26.3 min)
+    * **Night**: 12.0 hours
+    * **Day**: 12.0 hours
+    * Complete cycle: 24.0 hours (1.0 cycles per Earth day)
 
 ## 8. Radiative Transfer and Atmospheric Optics
 
@@ -358,7 +359,7 @@ This table explicitly connects each visual phenomenon to its physical basis and 
 * **Problem to Solve:** Dimming the light from the Arch as it passes through the thick atmosphere near the horizons.
 * **Importance:** Without light extinction, the Arch would be at full brightness even when viewed through thousands of miles of air. This would look physically "wrong" and flat.
 * **Selected Approach: Exponential Transmittance ($e^{-\tau}$).**
-    * **Description:** We calculate the optical depth $\tau$ as a function of the path length and the zenith opacity. The surface light is then multiplied by $T = \exp(-\tau)$. For a ray traveling through the atmosphere, the optical depth is:
+    * **Description:** We calculate the optical depth $\tau$ as a function of the path length and the zenith angle. The surface light is then multiplied by $T = \exp(-\tau)$. For a ray traveling through the atmosphere, the optical depth is:
       $$
       \tau = \tau_{zenith} \cdot \text{airmass}
       $$
@@ -370,8 +371,8 @@ This table explicitly connects each visual phenomenon to its physical basis and 
 * **Problem to Solve:** Eliminating the "razor-sharp" edges of the shadow squares that occur in a point-light simulation.
 * **Importance:** The Sun is a disk, not a point. In reality, a shadow edge is a gradient (the penumbra). A sharp 1-pixel line across a 1,000,000-mile-wide structure would look like a rendering error.
 * **Selected Approach: Penumbra from Solar Angular Diameter.**
-    * **Description:** The Sun's angular diameter of $\sigma \approx 0.53°$ creates a natural penumbra. From the Ring's perspective, the penumbra width in the circumferential direction is determined by the Sun's angular size as seen from the shadow square orbit: $W_p = D_{sun} \times R_{ring} / R_{ss}$. This creates a 5.54-million-mile-wide penumbra zone where sunlight gradually decreases from 100% to 0%.
-    * **How it solves the problem:** It softens the "Night Walls," making the transition from day to night feel like a natural 1-hour sunrise or sunset rather than an instantaneous flicker.
+    * **Description:** The Sun's angular diameter of $\sigma \approx 0.53°$ creates a natural penumbra. From the Ring's perspective, the penumbra width in the circumferential direction is determined by the Sun's angular size as seen from the shadow square orbit: $W_p = D_{sun} \times R_{ring} / R_{ss}$. At $R_{ss} = 36.57M$, this creates a 1.34-million-mile-wide penumbra zone where sunlight gradually decreases from 100% to 0%.
+    * **How it solves the problem:** It softens the "Night Walls," making the transition from day to night feel like a natural ~26.3-minute sunrise or sunset rather than an instantaneous flicker.
     * **Why we selected it:** It is physically accurate—the penumbra width is a direct consequence of the Sun's finite angular size. While not requiring complex ray tracing, it produces realistic soft shadow boundaries.
 
 ### 8.4 Ambient Illumination: Ring-shine
@@ -420,7 +421,7 @@ All geometry calculations occur in the observer-centric frame where:
 - Distant Arch: visible in the $+y$ hemisphere
 
 ### 9.3 Data Flow
-```
+
 Time T → Shadow Square Positions (angular)
       ↓
 Ray (origin, direction) → Cylinder Intersection (Delta-R solver)
@@ -432,7 +433,6 @@ Hit Position → Shadow State (angular modulo)
 Hit Position + Ray Direction → Atmospheric Path → Scattering + Extinction
       ↓
 Surface Color + Sky Color + Shadow Factor → Final Pixel Color
-```
 
 ## 10. Performance Considerations
 
@@ -441,7 +441,7 @@ The primary computational costs are:
 1. **Per-pixel ray-cylinder intersection** (Delta-R solver)
 2. **Multi-octave procedural noise sampling** (terrain generation)
 3. **Atmospheric integration** (single-pass volume integral)
-4. **Shadow state evaluation** (20 angular modulo checks per pixel)
+4. **Shadow state evaluation** (8 angular modulo checks per pixel)
 
 ### 10.2 Optimization Strategies
 - **Early Ray Termination:** Rays that miss the cylinder (heading into space) can be terminated immediately
@@ -468,7 +468,7 @@ The primary computational costs are:
 
 ### 11.3 Temporal Validation
 - **Shadow Square Drift:** Shadow square positions should remain synchronized over extended simulation time
-- **Day/Night Cycle:** 20 shadow squares should produce correct day/night period based on ring rotation
+- **Day/Night Cycle:** 8 Shadow Squares should produce correct day/night period based on retrograde orbital synchronization
 
 ### 11.4 Precision Validation
 - **Local Jitter:** Observer should be able to move by inches without geometric instability
