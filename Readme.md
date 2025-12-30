@@ -18,7 +18,7 @@ The success of the visualization is measured by the emergence of the following p
 * **Night Walls & Light Columns:** Vertical pillars of darkness cast by the Shadow Squares. A key goal is the **Emergent Night-Sky**: when the observer is in shadow, the sky should not be a void but should reveal the stars and the illuminated Arch overhead.
 * **Ring-shine (Ambient Illumination):** The "Night" side of the Ring is never truly dark. Because 95% of the Ring is in direct sunlight at any given moment, the shadowed regions must receive "Ring-shine"—secondary illumination reflected from the distant, lit parts of the Arch.
 * **Rim Walls:** Vertical barriers rising 1,000 miles at the lateral edges ($z = \pm 500,000$ miles). These serve as the "frames" of the world, visible as massive, distant mountain ranges on the left and right horizons.
-
+* **Volumetric Shadowing:** When the observer is in shadow, the air itself must reflect this. The engine must distinguish between a sunlit landscape seen through shadowed air and a shadowed landscape seen through sunlit air.
 
 ### 1.3 Physical Parameters (The Source of Truth)
 All calculations must use `float64` precision for the following constants.
@@ -55,9 +55,13 @@ All calculations must use `float64` precision for the following constants.
 * **Local Coordinate Frame:** * **Origin $(0,0,0)$:** The Observer's Eyes.
     * **$+y$ Axis:** Zenith (pointing toward the Sun/Arch).
     * **$-y$ Axis:** Nadir (pointing toward the local ground).
- 
 
-# Ringworld Physics Engine: Technical Design Document (Rev 9.0)
+### 1.5 Temporal State Management
+* **Problem to Solve:** Maintaining synchronized motion of shadow squares and ring rotation over long durations without floating-point drift.
+* **Importance:** At $670$ miles/s, a $0.0001$ deviation in time accumulation results in miles of positional error.
+* **Selected Approach: Absolute Epoch Accumulation.**
+    * **Description:** All positions are calculated as a function of $T_{total}$ (double precision seconds since start). $T=0$ defines a "High Noon" alignment at the observer's longitude.
+    * **How it solves the problem:** It prevents incremental error. Instead of adding `delta_t` to a position, we derive position from an absolute time scalar.
 
 ## Section 2: Geometric Logic and Observer-Centric Architecture
 
@@ -70,8 +74,6 @@ All calculations must use `float64` precision for the following constants.
 * **Considered & Discarded: Global Cartesian (Sun-Centric).**
     * **Why not:** At $1$ AU from the origin, performing additions or subtractions (like moving a camera by 1 inch) results in **Catastrophic Cancellation**. The large magnitude of the distance "swallows" the small magnitude of the movement, leading to jagged, vibrating geometry and "Z-fighting" artifacts.
 
-
-
 ### 2.2 The Intersection Kernel: The Delta-R Solver
 * **Problem to Solve:** Solving the quadratic equation for a ray-cylinder intersection without losing the significance of the observer's height ($h$).
 * **Importance:** The constant term in a standard quadratic intersection ($C = \text{dist}^2 - R^2$) involves subtracting two massive, nearly identical numbers. If the precision of $h$ is lost during this subtraction, the "Ground" will either disappear or jitter with an invisible plane at $h=0$.
@@ -80,8 +82,6 @@ All calculations must use `float64` precision for the following constants.
     * **Why we selected it:** It preserves the significant digits of the 10-foot eye-level even when the structure radius is 93 million miles, ensuring the ground remains exactly where the observer expects it.
 * **Considered & Discarded: Naive Analytical Intersection.**
     * **Why not:** Implementation of $(R-h)^2 - R^2$ results in the most significant bits of $h$ being truncated during the subtraction of the massive $R^2$ terms.
-
-
 
 ### 2.3 Solving for Distance: The Stable Quadratic (q-method)
 * **Problem to Solve:** Finding two roots ($t_{ground}$ and $t_{arch}$) accurately when one value is extremely small ($\approx 0$) and the other is extremely large ($2R$).
@@ -101,8 +101,13 @@ All calculations must use `float64` precision for the following constants.
 * **Considered & Discarded: Ray Marching (SDFs) for Walls.**
     * **Why not:** While SDFs are flexible for complex shapes, they are too computationally expensive for a distance of 500,000 miles, requiring thousands of sampling steps that an analytical plane-solver handles in a single operation.
 
-
-# Ringworld Physics Engine: Technical Design Document (Rev 10.0)
+### 2.5 Atmospheric Shell Intersection
+* **Problem to Solve:** Defining the geometric boundary where the "Sky" ends and "Space" (Starfield) begins.
+* **Importance:** Without a ceiling, a ray pointing into the sky that misses the Arch would calculate infinite airmass. We need a physical boundary to terminate the volume integration.
+* **Selected Approach: Internal Sphere/Cylinder Intersection.**
+    * **Description:** We solve for the intersection with a secondary cylinder at $R_{atmos} = R - H_a$.
+    * **How it solves the problem:** This provides a "hit" distance $t_{sky}$ for rays that don't hit the structure. If a ray misses the structure but hits this shell, we calculate the scattering from $0$ to $t_{sky}$ and then render the background starfield.
+    * **Why we selected it:** It treats the atmosphere as a physical volume with a defined edge, allowing for crisp transitions between the blue horizon and the black of space.
 
 ## Section 3: Surface Mapping and Procedural Data
 
@@ -115,8 +120,6 @@ All calculations must use `float64` precision for the following constants.
     * **Why we selected it:** It allows for "Infinite Resolution" through procedural noise functions. Instead of reading a pixel from a file, the engine samples a mathematical function at $(\theta, z)$, ensuring detail is maintained whether the viewer is looking at the ground or the Arch.
 * **Considered & Discarded: Tri-planar Mapping.**
     * **Why not:** While effective for rocks and small terrains, tri-planar mapping in an astronomical cylindrical context creates projection stretching at the "shoulders" of the cylinder and is computationally more expensive than a simple angular transform.
-
-
 
 ### 3.2 Shadow Square State: Temporal Angular Lookup
 * **Problem to Solve:** Determining if a specific point $(\theta, z)$ on the ring is in sunlight or shadow, accounting for the relativistic speed of the shadow squares.
@@ -140,12 +143,18 @@ All calculations must use `float64` precision for the following constants.
 * **Considered & Discarded: Geometry Displacing (Vertex Displacement).**
     * **Why not:** Moving actual vertices would require a level of mesh subdivision that would crash any current system. At this scale, the "Geometry" must be implicit in the distance calculation.
 
-
-
 ### 3.4 Discarded Data Approaches: Tiled Textures
 * **Problem to Solve:** Texturing the surface.
 * **Considered & Discarded: Seamless Tiling Textures.**
     * **Why not:** Tiling a texture across a 584-million-mile circumference would result in "Pattern Moire"—at a distance, the repetition of the tiles would create a grid-like artifact that destroys the illusion of a natural world. Procedural noise (Perlin/Simplex) is required to ensure every square mile is unique.
+ 
+### 3.5 Seamless Procedural Sampling
+* **Problem to Solve:** Preventing a visual "seam" in the terrain where the angular coordinate $\theta$ wraps from $2\pi$ back to $0$.
+* **Importance:** In a cylindrical world, the observer can look "all the way around." A discontinuity in the noise function would create a vertical line across the entire world.
+* **Selected Approach: 3D Periodic Noise Mapping.**
+    * **Description:** We do not sample noise using $(\theta, z)$. Instead, we map $(\theta, z)$ onto a virtual 3D cylinder: $X = \cos(\theta)$, $Y = \sin(\theta)$, $Z = z$.
+    * **How it solves the problem:** Because $\cos$ and $\sin$ are continuous, the noise function transitions perfectly across the $0/2\pi$ boundary.
+    * **Why we selected it:** It is the standard mathematical solution for mapping 2D planar noise onto a manifold without seams.
 
 ## Section 4: Radiative Transfer and Atmospheric Optics
 
@@ -176,7 +185,6 @@ All calculations must use `float64` precision for the following constants.
     * **How it solves the problem:** It softens the "Night Walls," making the transition from day to night feel like a natural sunset/sunrise lasting several seconds rather than an instantaneous flicker.
     * **Why we selected it:** It mimics the effect of a disk-light source with negligible computational overhead compared to multi-sample area lighting.
 
-
 ### 4.4 Ambient Illumination: Ring-shine
 * **Problem to Solve:** Preventing the "Night" side of the ring from being pitch black.
 * **Importance:** On a Ringworld, the night side is illuminated by the enormous, sunlit Arch overhead. This "Ring-shine" should be bright enough to see by—roughly equivalent to a landscape under multiple full moons.
@@ -189,3 +197,11 @@ All calculations must use `float64` precision for the following constants.
 * **Problem to Solve:** Calculating light bounces from the Arch to the floor.
 * **Considered & Discarded: Real-time Path Tracing.**
     * **Why not:** While highly accurate, path tracing across $10^8$ miles is currently impossible for real-time applications. Our analytical "Ring-shine" approximation provides $90\%$ of the visual benefit for $0.1\%$ of the computational cost.
+
+### 4.6 Shadow-Sky Coupling (Volumetric Shadowing)
+* **Problem to Solve:** Correctly rendering the "Night Wall" within the air itself.
+* **Importance:** If a shadow square is blocking the sun, the air in that shadow should not be blue; it should be dark. Conversely, looking "out" from a shadow into a sunlit area should show glowing blue air.
+* **Selected Approach: Step-Function Shadow Integration.**
+    * **Description:** The in-scattering term ($I$) is multiplied by the shadow factor $S_f$ sampled at the midpoint of the atmospheric path.
+    * **How it solves the problem:** It ensures that "Night" feels 3D. The sky overhead darkens as the shadow square passes, rather than just the ground turning black.
+    * **Why we selected it:** It provides the "Light Column" effect where the edges of the shadow squares are visible in the haze.
