@@ -92,6 +92,68 @@ def test_arch_visibility_regression():
     assert color[2] > 0.1, f"Arch blue component {color[2]} is too low (extinguished?)"
     assert color[0] > 0.05, f"Arch red component {color[0]} is too low."
 
+def test_coordinate_system_physical():
+    """
+    Verify the fundamental coordinate system distances and transforms.
+    """
+    renderer = Renderer()
+    R = renderer.R
+    h = renderer.h
+    
+    # 1. Horizon Check
+    t_horiz = renderer.intersect_ring(np.array([0,0,0]), np.array([1, 0, 0]))
+    expected_horizon = np.sqrt(2 * R * h - h**2)
+    assert np.allclose(t_horiz, expected_horizon, rtol=1e-3)
+    
+    # 2. Zenith Check (Far Side Arch)
+    t_arch = renderer.intersect_ring(np.array([0,0,0]), np.array([0, 1, 0]))
+    expected_arch = 2 * R - h
+    assert np.allclose(t_arch, expected_arch, rtol=1e-5)
+    
+    # 3. Sun Check (Surface)
+    t_sun = renderer.intersect_sun(np.array([0,0,0]), np.array([0, 1, 0]))
+    expected_sun_surface = (R - h) - renderer.R_sun
+    assert np.allclose(t_sun, expected_sun_surface, rtol=1e-5)
+
+def test_basis_vectors_stability():
+    """
+    Verify that the camera basis doesn't flip or rotate unexpectedly.
+    """
+    # Looking spinward and slightly up
+    look_at = np.array([1.0, 0.3, 0.0])
+    forward = look_at / np.linalg.norm(look_at)
+    up_ref = np.array([0.0, 1.0, 0.0])
+    right = np.cross(forward, up_ref)
+    right = right / np.linalg.norm(right)
+    up = np.cross(right, forward)
+    
+    assert right[2] > 0.99, "Right vector should be Axial (+Z)"
+    assert up[1] > 0.9, "Up vector should be Zenith-heavy (+Y)"
+
+def test_default_viewpoint_content():
+    """
+    E2E Test: Verify the default view contains ground (bottom) and arch (top).
+    """
+    renderer = Renderer()
+    # Render a tiny 32x32 image to check sectors
+    img = renderer.render(width=32, height=32, fov=110.0, look_at=np.array([1.0, 0.3, 0.0]))
+    
+    # Bottom sector (Ground)
+    # Ground is green: [51, 127, 51] roughly.
+    bottom_pixel = img[31, 16] 
+    assert bottom_pixel[1] > bottom_pixel[0], "Bottom of screen should be green (ground)."
+    
+    # Top sector (Sky at high elevation)
+    # The arch rises from the horizon. At 71 deg elevation (top of 110 FOV),
+    # the blue component should be around 15% of 255 (~38).
+    top_pixel = img[0, 16]
+    assert top_pixel[2] > 30, f"Top of screen blue {top_pixel[2]} is too low."
+    
+    # Middle-Right sector (Horizon/Rising Arch)
+    # This is more likely to show the distinct 'blue wall'
+    mid_pixel = img[16, 16]
+    assert mid_pixel[2] > 50, f"Center blue {mid_pixel[2]} should be higher due to airmass."
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__])
