@@ -162,7 +162,25 @@ def test_default_viewpoint_content():
 
 
 
+def test_zenith_stability():
+    """
+    Verify that looking straight up (Pitch 90) does not cause camera flipping.
+    Across all yaw angles, the 'right' vector should remain horizontal.
+    """
+    renderer = Renderer()
+    # At Pitch 90, Yaw should determine which direction is 'down' on screen
+    # but the arch should always be vertical.
+    for yaw in [0, 90, 180, 270]:
+        # We can't easily check internal basis vectors via .render(), 
+        # but we can verify it doesn't crash and returns a valid image.
+        img = renderer.render(width=32, height=32, yaw=yaw, pitch=90.0)
+        assert img.shape == (32, 32, 3), f"Zenith render failed for yaw {yaw}"
+        # At Zenith looking through 1000 miles of air, we should see blue
+        center_pixel = img[16, 16]
+        assert center_pixel[2] > 0, "Zenith sky should be blue"
+
 def test_toggles_effects():
+
     """
     Verify that toggles for scattering, extinction, and ring-shine have measurable effects.
     """

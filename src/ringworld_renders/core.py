@@ -384,21 +384,27 @@ class Renderer:
         return np.clip(final_colors, 0.0, 1.0)
 
     @functools.lru_cache(maxsize=32)
-    def _render_cached(self, width, height, fov, look_at_tuple, time_sec, 
+    def _render_cached(self, width, height, fov, yaw, pitch, time_sec, 
                        use_atmosphere, use_shadows, use_ring_shine):
         """
         Internal cached render call using hashable arguments.
+        Yaw 0 = +X (Spinward), Yaw 90 = +Z (Axial)
+        Pitch 90 = +Y (Zenith)
         """
-        look_at = np.array(look_at_tuple)
+        # 1. Construct Basis from Spherical Coordinates (Robust)
+        y_rad = np.deg2rad(yaw)
+        p_rad = np.deg2rad(pitch)
         
-        # Camera basis
-        forward = look_at / np.linalg.norm(look_at)
-        up_ref = np.array([0.0, 1.0, 0.0])
-        if abs(np.dot(forward, up_ref)) > 0.999:
-            right = np.cross(forward, np.array([0.0, 0.0, 1.0]))
-        else:
-            right = np.cross(forward, up_ref)
-        right = right / np.linalg.norm(right)
+        # Look vector (Forward)
+        lx = np.cos(p_rad) * np.cos(y_rad)
+        ly = np.sin(p_rad)
+        lz = np.cos(p_rad) * np.sin(y_rad)
+        forward = np.array([lx, ly, lz])
+        
+        # Right vector: Always horizontal, perpendicular to zenith and forward.
+        right = np.array([-np.sin(y_rad), 0.0, np.cos(y_rad)])
+        
+        # Up vector: perpendicular to Forward and Right
         up = np.cross(right, forward)
         up = up / np.linalg.norm(up)
         
@@ -424,19 +430,25 @@ class Renderer:
         
         return (colors.reshape(height, width, 3) * 255).astype(np.uint8)
 
-    def render(self, width=400, height=300, fov=95.0, look_at=np.array([1.0, 1.0, 0.0]), 
+
+    def render(self, width=400, height=300, fov=95.0, 
+               yaw=0.0, pitch=45.0, look_at=None,
                time_sec=0.0, use_atmosphere=True, 
                use_shadows=True, use_ring_shine=True):
-
         """
         Render a single image of the Ringworld using NumPy vectorization.
-        Uses LRU cache for identical parameters.
+        Uses spherical coordinates (yaw/pitch) for a robust camera basis.
         """
-        # Convert non-hashable numpy array to tuple for caching
-        look_at_tuple = tuple(look_at.tolist())
+        # Handle look_at override for backward compatibility
+        if look_at is not None:
+            # Convert look_at vector back to yaw/pitch
+            mag = np.linalg.norm(look_at)
+            pitch = np.rad2deg(np.arcsin(np.clip(look_at[1] / mag, -1.0, 1.0)))
+            yaw = np.rad2deg(np.arctan2(look_at[2], look_at[0]))
         
         return self._render_cached(
-            width, height, fov, look_at_tuple, time_sec,
+            width, height, fov, yaw, pitch, time_sec,
             use_atmosphere, use_shadows, use_ring_shine
         )
+
 
