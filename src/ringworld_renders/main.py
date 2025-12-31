@@ -5,7 +5,8 @@ import time
 import numpy as np
 import PIL.Image
 from ringworld_renders.core import Renderer
-from ringworld_renders.ui import create_ui
+from ringworld_renders.ui import create_ui, CSS
+
 
 def generate_samples(renderer, resolution=1024):
     """Generate high-resolution production samples."""
@@ -21,8 +22,9 @@ def generate_samples(renderer, resolution=1024):
     for name, t_sec, filename in samples:
         print(f"Rendering {name}...")
         t0 = time.time()
-        img = renderer.render(width=resolution, height=resolution, fov=110, 
-                             look_at=np.array([1.0, 0.3, 0.0]), time_sec=t_sec)
+        img = renderer.render(width=resolution, height=resolution, fov=95, 
+                             look_at=np.array([1.0, 1.0, 0.0]), time_sec=t_sec)
+
         print(f"  Complete in {time.time() - t0:.2f}s")
         PIL.Image.fromarray(img).save(os.path.join("output", filename))
 
@@ -62,7 +64,8 @@ def main():
     if args.ui:
         print("Launching UI...")
         demo = create_ui()
-        demo.launch()
+        demo.launch(css=CSS)
+
     elif args.samples:
         generate_samples(renderer, args.res)
     elif args.verify:

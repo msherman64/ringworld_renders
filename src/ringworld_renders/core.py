@@ -1,4 +1,5 @@
 import numpy as np
+import functools
 
 class Renderer:
     def __init__(self, radius_miles=92955807.0, width_miles=1000000.0, eye_height_miles=0.001242742):
@@ -382,12 +383,14 @@ class Renderer:
             return np.clip(final_colors[0], 0.0, 1.0)
         return np.clip(final_colors, 0.0, 1.0)
 
-    def render(self, width=400, height=300, fov=110.0, look_at=np.array([1.0, 0.3, 0.0]), 
-               time_sec=0.0, use_atmosphere=True, 
-               use_shadows=True, use_ring_shine=True):
+    @functools.lru_cache(maxsize=32)
+    def _render_cached(self, width, height, fov, look_at_tuple, time_sec, 
+                       use_atmosphere, use_shadows, use_ring_shine):
         """
-        Render a single image of the Ringworld using NumPy vectorization.
+        Internal cached render call using hashable arguments.
         """
+        look_at = np.array(look_at_tuple)
+        
         # Camera basis
         forward = look_at / np.linalg.norm(look_at)
         up_ref = np.array([0.0, 1.0, 0.0])
@@ -418,6 +421,22 @@ class Renderer:
         ray_origin = np.array([0.0, 0.0, 0.0])
         colors = self.get_color(ray_origin, flat_ray_dirs, time_sec, use_atmosphere, 
                                 use_shadows, use_ring_shine)
-
         
         return (colors.reshape(height, width, 3) * 255).astype(np.uint8)
+
+    def render(self, width=400, height=300, fov=95.0, look_at=np.array([1.0, 1.0, 0.0]), 
+               time_sec=0.0, use_atmosphere=True, 
+               use_shadows=True, use_ring_shine=True):
+
+        """
+        Render a single image of the Ringworld using NumPy vectorization.
+        Uses LRU cache for identical parameters.
+        """
+        # Convert non-hashable numpy array to tuple for caching
+        look_at_tuple = tuple(look_at.tolist())
+        
+        return self._render_cached(
+            width, height, fov, look_at_tuple, time_sec,
+            use_atmosphere, use_shadows, use_ring_shine
+        )
+
