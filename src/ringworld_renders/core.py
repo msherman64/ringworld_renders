@@ -528,19 +528,25 @@ class Renderer:
 
 
     def get_color(self, ray_origin, ray_directions, time_sec=0.0, 
-                  use_atmosphere=True, use_shadows=True, use_ring_shine=True):
+                  use_atmosphere=True, use_shadows=True, use_ring_shine=True,
+                  debug_shadow_squares=False):
         """
-        Fully vectorized shader.
+        Calculate the color for each ray.
+        vectorized for N rays.
         """
         is_single = ray_directions.ndim == 1
         if is_single:
             ray_directions = ray_directions[None, :]
         num_rays = ray_directions.shape[0]
         
+        # 0. Intersections
+        # Note: intersect_sun uses sphere logic. Not quite physically perfectly aligned with shadow squares?
+        # But for this purpose, it works.
+        
         t_sun = self.intersect_sun(ray_origin, ray_directions)
         t_ring = self.intersect_ring(ray_origin, ray_directions)
         t_wall = self.intersect_rim_walls(ray_origin, ray_directions)
-        t_ss = self.intersect_shadow_squares(ray_origin, ray_directions, time_sec) if use_shadows else np.full(num_rays, np.inf)
+        t_ss = self.intersect_shadow_squares(ray_origin, ray_directions, time_sec) if use_shadows or debug_shadow_squares else np.full(num_rays, np.inf)
         
         # Primary hit logic
         hit_t = np.minimum(t_sun, np.minimum(t_ring, np.minimum(t_ss, t_wall)))
@@ -562,8 +568,43 @@ class Renderer:
         # 2. Shadow Square Color (Occlusion)
         ss_mask = hit_is_ss
         if np.any(ss_mask):
-            # Shadow squares are opaque and black (back side)
-            surface_colors[ss_mask] = np.array([0.0, 0.0, 0.0])
+            if debug_shadow_squares:
+                # False Colors
+                valid_dirs = ray_directions[ss_mask]
+                hits = ray_origin + t_ss[ss_mask][:, None] * valid_dirs
+                
+                center_y = self.R - self.h
+                # theta = atan2(x, -(y-cy))
+                # Note: core logic uses 0=Noon, pi/2=Spinward.
+                theta = np.arctan2(hits[:, 0], -(hits[:, 1] - center_y))
+                
+                SOLAR_DAY = 24.0 * 3600.0
+                T_assembly = self.N_ss * SOLAR_DAY
+                omega_ss = -2.0 * np.pi / T_assembly
+                
+                angular_width = self.L_ss / self.R_ss
+                half_width = angular_width / 2.0
+                
+                ss_colors_mapped = np.zeros((np.sum(ss_mask), 3))
+                
+                SS_COLORS = [
+                    [1.0, 0.2, 0.2], [0.2, 1.0, 0.2], [0.2, 0.2, 1.0], [1.0, 1.0, 0.2],
+                    [1.0, 0.2, 1.0], [0.2, 1.0, 1.0], [1.0, 0.6, 0.0], [0.6, 0.0, 1.0]
+                ]
+                
+                for i in range(self.N_ss):
+                    ss_center_theta = (i + 0.5) * (2.0 * np.pi / self.N_ss) + omega_ss * time_sec
+                    d_theta = (theta - ss_center_theta + np.pi) % (2.0 * np.pi) - np.pi
+                    
+                    # Check if in this square (with tolerance)
+                    mask_in_sq = np.abs(d_theta) <= (half_width * 1.5)
+                    col = np.array(SS_COLORS[i % len(SS_COLORS)])
+                    ss_colors_mapped[mask_in_sq] = col
+                
+                surface_colors[ss_mask] = ss_colors_mapped
+            else:
+                # Shadow squares are opaque and black (back side)
+                surface_colors[ss_mask] = np.array([0.0, 0.0, 0.0])
             
         # 3. Rim Wall Color
         wall_mask = hit_is_wall
@@ -614,7 +655,7 @@ class Renderer:
 
     @functools.lru_cache(maxsize=32)
     def _render_cached(self, width, height, fov, yaw, pitch, time_sec, 
-                       use_atmosphere, use_shadows, use_ring_shine):
+                       use_atmosphere, use_shadows, use_ring_shine, debug_shadow_squares):
         """
         Internal cached render call using hashable arguments.
         Yaw 0 = +X (Spinward), Yaw 90 = +Z (Axial)
@@ -655,7 +696,7 @@ class Renderer:
         flat_ray_dirs = ray_dirs.reshape(-1, 3)
         ray_origin = np.array([0.0, 0.0, 0.0])
         colors = self.get_color(ray_origin, flat_ray_dirs, time_sec, use_atmosphere, 
-                                use_shadows, use_ring_shine)
+                                use_shadows, use_ring_shine, debug_shadow_squares)
         
         return (colors.reshape(height, width, 3) * 255).astype(np.uint8)
 
@@ -663,7 +704,8 @@ class Renderer:
     def render(self, width=400, height=300, fov=95.0, 
                yaw=0.0, pitch=45.0, look_at=None,
                time_sec=0.0, use_atmosphere=True, 
-               use_shadows=True, use_ring_shine=True):
+               use_shadows=True, use_ring_shine=True,
+               debug_shadow_squares=False):
         """
         Render a single image of the Ringworld using NumPy vectorization.
         Uses spherical coordinates (yaw/pitch) for a robust camera basis.
@@ -677,7 +719,5 @@ class Renderer:
         
         return self._render_cached(
             width, height, fov, yaw, pitch, time_sec,
-            use_atmosphere, use_shadows, use_ring_shine
+            use_atmosphere, use_shadows, use_ring_shine, debug_shadow_squares
         )
-
-
