@@ -1,5 +1,5 @@
 # Rendered images
-*.png
+# *.png
 
 # Python
 .venv
