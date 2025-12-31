@@ -202,26 +202,43 @@ class Renderer:
         seg_near_end = np.minimum(t_hits, t_z_exit)
         seg_near_end[looking_up] = np.minimum(seg_near_end[looking_up], t_i1[looking_up])
         
-        # Far segment: enters at t_i2, exits at min(t_hit, t_z_exit, t_o2??)
-        # Simplified: Far segment is t_i2 to t_hit, clipped by Z
-        # For Ringworld, we ignore air exiting the 'outer' radius R because it's vacuum there too
-        far_mask = looking_up & (t_hits > t_i2) & (np.abs(t_i2*dz) <= self.W/2.0)
+        # Far segment: enters at t_i2, exits at t_hit, clipped by Z
+        # We ensure t_i2 is finite to avoid NaN in the width check
+        far_mask = looking_up & (t_hits > t_i2) & np.isfinite(t_i2)
+        if np.any(far_mask):
+            z_at_i2 = t_i2[far_mask] * dz[far_mask]
+            # Use a temporary mask to avoid indexing errors
+            within_z = np.abs(z_at_i2) <= self.W / 2.0
+            updated_mask = far_mask.copy()
+            updated_mask[far_mask] = within_z
+            far_mask = updated_mask
         
         # 3. Analytical Exponential Integration
-        def integrated_tau(h0, L, cos_theta):
-            # Integral of e^(-(h0 + s*cos_theta)/H) ds from 0 to L
-            # = e^(-h0/H) * [ (1 - e^(-L*cos_theta/H)) / (cos_theta/H) ]
+        def integrated_tau(h_start, L, cos_theta):
+            # Integral of e^(-h(s)/H) ds from 0 to L
+            # = [ e^(-h_start/H) - e^(-h_end/H) ] / (cos_theta/H)
             H = self.H_scale
-            # Handle horizontal rays (cos_theta near 0)
+            h_end = h_start + L * cos_theta
+            
             with np.errstate(divide='ignore', invalid='ignore'):
+                # Handle horizontal rays (cos_theta near 0)
+                # For small cos_theta, it's roughly L * e^(-h_avg/H)
+                # But the analytical form is stable if we use the right terms.
+                v1 = -h_start / H
+                v2 = -h_end / H
+                # Cap exponents to prevent overflow
+                v1 = np.clip(v1, -700, 700)
+                v2 = np.clip(v2, -700, 700)
+                
                 term = np.where(np.abs(cos_theta) < 1e-6,
-                                L / H, # Limit as cos_theta -> 0
-                                (1.0 - np.exp(-L * cos_theta / H)) / cos_theta)
-            return np.exp(-h0 / H) * term
+                                np.exp(v1) * (L / H),
+                                (np.exp(v1) - np.exp(v2)) / cos_theta)
+            return term
 
         # NEAR SEGMENT Optical Depth
         tau_near = self.tau_zenith * integrated_tau(r_obs, seg_near_end, dy)
         T_near = np.exp(-tau_near)
+
         
         # FAR SEGMENT Optical Depth
         tau_far = np.zeros_like(tau_near)
