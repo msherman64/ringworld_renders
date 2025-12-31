@@ -136,11 +136,11 @@ def test_far_side_atmo_doubling():
     ray_up = np.array([0.0, 1.0, 0.0])
     # Distance just past the ceiling (H_a is 100 miles)
     t_just_past_ceiling = (renderer.H_a + 1.0) 
-    trans_vertical, _ = renderer.get_atmospheric_effects(np.array([t_just_past_ceiling]), ray_up)
+    trans_vertical, _ = renderer.get_atmospheric_effects(np.array([t_just_past_ceiling]), np.array([0,0,0]), ray_up)
     
     # 2. Far side arch distance (looking UP until far surface)
     t_far_surface = 2 * renderer.R - renderer.h
-    trans_far, _ = renderer.get_atmospheric_effects(np.array([t_far_surface]), ray_up)
+    trans_far, _ = renderer.get_atmospheric_effects(np.array([t_far_surface]), np.array([0,0,0]), ray_up)
     
     # Validation: far side should have much more extinction (lower transmittance)
     # Check blue channel (most extinguished)
@@ -158,7 +158,7 @@ def test_axial_sky_clarity():
     renderer = Renderer()
     # Look pure axial (+Z)
     ray_axial = np.array([0.0, 0.0, 1.0])
-    trans, scat = renderer.get_atmospheric_effects(np.array([1e12]), ray_axial)
+    trans, scat = renderer.get_atmospheric_effects(np.array([1e12]), np.array([0,0,0]), ray_axial)
     
     # Distance to side-wall is W/2 = 500,000 miles. 
     # Ceiling is only 100 miles. Wait. 
@@ -180,7 +180,7 @@ def test_axial_sky_clarity():
     # Let's check a ray looking diagonally out (dy=0.1, dz=1.0)
     ray_diag = np.array([0.0, 0.1, 1.0])
     ray_diag /= np.linalg.norm(ray_diag)
-    trans_diag, scat_diag = renderer.get_atmospheric_effects(np.array([1e12]), ray_diag)
+    trans_diag, scat_diag = renderer.get_atmospheric_effects(np.array([1e12]), np.array([0,0,0]), ray_diag)
     
     # If the bug exists (infinite tube), this ray will trace millions of miles.
     # If fixed, it should be bounded by something reasonable (the width).
@@ -196,9 +196,9 @@ def test_sky_phase_function():
     renderer = Renderer()
     # At noon, sun is at theta=pi/2 (roughly 'up' in local frame)
     # 1. Looking pure UP (near sun)
-    _, scat_up = renderer.get_atmospheric_effects(np.array([100.0]), np.array([0.0, 1.0, 0.0]), time_sec=0.0)
+    _, scat_up = renderer.get_atmospheric_effects(np.array([100.0]), np.array([0,0,0]), np.array([0.0, 1.0, 0.0]), time_sec=0.0)
     # 2. Looking at horizon (90 deg to sun)
-    _, scat_horiz = renderer.get_atmospheric_effects(np.array([100.0]), np.array([1.0, 0.0, 0.0]), time_sec=0.0)
+    _, scat_horiz = renderer.get_atmospheric_effects(np.array([100.0]), np.array([0,0,0]), np.array([1.0, 0.0, 0.0]), time_sec=0.0)
     
     # Rayleigh P(theta) = 3/4(1 + cos^2(theta))
     # Near sun (theta ~ 0) -> P ~ 1.5
@@ -238,7 +238,7 @@ def test_spectral_reddening():
     
     # Hit distance is very large (misses ground, exits ceiling)
     t_hits = np.array([1e15]) 
-    trans, scat = renderer.get_atmospheric_effects(t_hits, ray_horiz)
+    trans, scat = renderer.get_atmospheric_effects(t_hits, np.array([0,0,0]), ray_horiz)
     
     print(f"\nSpectral Extinction Debug:")
     print(f"Ray dy: {ray_horiz[1]}")

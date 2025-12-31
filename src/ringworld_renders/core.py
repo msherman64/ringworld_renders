@@ -13,7 +13,7 @@ class Renderer:
         self.h = eye_height_miles * MILES_TO_METERS
         
         # Atmosphere parameters (Rayleigh 1/lambda^4 scaling)
-        self.H_a = 1000.0 * MILES_TO_METERS # 1000 mile Rim Walls
+        self.H_a = 100.0 * MILES_TO_METERS # 100 mile Effective Ceiling
         self.H_scale = 5.3 * MILES_TO_METERS # Scale height for 1G
         # Rayleigh spectral scaling relative to blue (450nm): [650nm, 550nm, 450nm]
         # powers = (450 / [650, 550, 450])^4
@@ -120,6 +120,83 @@ class Renderer:
             
         return t[0] if is_single else t
 
+    def intersect_shadow_squares(self, ray_origin, ray_directions, time_sec):
+        """
+        Vectorized intersection of ray and the shadow square cylindrical shell.
+        """
+        is_single = ray_directions.ndim == 1
+        if is_single:
+            ray_directions = ray_directions[None, :]
+            
+        dx = ray_directions[:, 0]
+        dy = ray_directions[:, 1]
+        ox, oy, oz = ray_origin
+        
+        R_ss = self.R_ss
+        center_y = self.R - self.h
+        
+        # Intersection with cylinder (r = R_ss)
+        # (x - cx)^2 + (y - cy)^2 = R^2
+        # cx = 0, cy = center_y
+        # dx^2*t^2 + 2*dx*ox*t + ox^2 + dy^2*t^2 + 2*dy*(oy-center_y)*t + (oy-center_y)^2 = R_ss^2
+        
+        a = dx**2 + dy**2
+        b = 2.0 * (ox*dx + (oy - center_y)*dy)
+        c = ox**2 + (oy - center_y)**2 - R_ss**2
+        
+        discriminant = b**2 - 4.0 * a * c
+        valid_mask = (a > 1e-12) & (discriminant >= 0)
+        
+        t = np.full(ray_directions.shape[0], np.inf)
+        
+        if np.any(valid_mask):
+            sqrt_disc = np.sqrt(discriminant[valid_mask])
+            t1 = (-b[valid_mask] - sqrt_disc) / (2.0 * a[valid_mask])
+            t2 = (-b[valid_mask] + sqrt_disc) / (2.0 * a[valid_mask])
+            
+            # Select smallest positive t
+            best_t = np.full(t1.shape, np.inf)
+            m1 = t1 > 1e-6
+            best_t[m1] = t1[m1]
+            m2 = (t2 > 1e-6) & (t2 < best_t)
+            best_t[m2] = t2[m2]
+            
+            # Now check which hits actually intersect a square (vs the gaps)
+            hit_mask = best_t < np.inf
+            if np.any(hit_mask):
+                valid_hits = best_t[hit_mask]
+                dirs = ray_directions[valid_mask][hit_mask]
+                hit_p = ray_origin + valid_hits[:, None] * dirs
+                
+                # Check height (axial width)
+                # Shadow squares are centered at z=0, width H_ss
+                z_check = np.abs(hit_p[:, 2]) <= self.H_ss / 2.0
+                
+                # Check angular position
+                theta = np.arctan2(hit_p[:, 0], -(hit_p[:, 1] - center_y))
+                
+                SOLAR_DAY = 24.0 * 3600.0
+                T_assembly = self.N_ss * SOLAR_DAY
+                omega_ss = -2.0 * np.pi / T_assembly
+                
+                angular_width = self.L_ss / self.R_ss
+                half_width = angular_width / 2.0
+                
+                in_any_square = np.zeros(hit_p.shape[0], dtype=bool)
+                for i in range(self.N_ss):
+                    ss_center_theta = (i + 0.5) * (2.0 * np.pi / self.N_ss) + omega_ss * time_sec
+                    d_theta = (theta - ss_center_theta + np.pi) % (2.0 * np.pi) - np.pi
+                    in_any_square |= (np.abs(d_theta) <= half_width)
+                
+                final_hit_mask = z_check & in_any_square
+                
+                # Update t[valid_mask]
+                results = np.full(best_t.shape, np.inf)
+                results[hit_mask] = np.where(final_hit_mask, valid_hits, np.inf)
+                t[valid_mask] = results
+                
+        return t[0] if is_single else t
+
     def get_shadow_factor(self, hit_points, time_sec):
         """
         Vectorized shadow factor calculation.
@@ -166,10 +243,80 @@ class Renderer:
                 
         return shadow_factor[0] if is_single else shadow_factor
 
-    def get_atmospheric_effects(self, t_hits, ray_directions, time_sec=0.0, use_shadows=True):
+    def intersect_rim_walls(self, ray_origin, ray_directions):
         """
-        Analytical integral of exponential density: tau = tau_z * integral[e^(-h(s)/H) ds] / H.
-        This provides physical grounding and eliminates banding artifacts.
+        Vectorized intersection with Rim Walls (planes at Z = +/- W/2).
+        Walls exist between R - H_w and R.
+        """
+        is_single = ray_directions.ndim == 1
+        if is_single:
+            ray_directions = ray_directions[None, :]
+            
+        dx, dy, dz = ray_directions[:, 0], ray_directions[:, 1], ray_directions[:, 2]
+        ox, oy, oz = ray_origin
+        
+        # Two planes: z = W/2 (Positive) and z = -W/2 (Negative)
+        t = np.full(ray_directions.shape[0], np.inf)
+        
+        # We need to handle dz near 0
+        valid_dz = np.abs(dz) > 1e-12
+        
+        if np.any(valid_dz):
+            # Calculate t for both planes
+            with np.errstate(divide='ignore'):
+                t_pos = (self.W / 2.0 - oz) / dz
+                t_neg = (-self.W / 2.0 - oz) / dz
+            
+            # Candidate t
+            t_cand = np.full_like(t, np.inf)
+            
+            # Positive wall candidates (dz > 0 hits Pos wall)
+            mask_pos = valid_dz & (dz > 0)
+            if np.any(mask_pos):
+                tp = t_pos[mask_pos]
+                # Check radius
+                t_sub = tp
+                dx_s, dy_s = dx[mask_pos], dy[mask_pos]
+                hx = ox + t_sub * dx_s
+                hy = oy + t_sub * dy_s
+                
+                # Center for radius check is (0, R-h, 0)
+                center_y = self.R - self.h
+                r_sq = hx**2 + (hy - center_y)**2
+                
+                H_w = 1000.0 * 1609.34
+                valid_r = (r_sq <= self.R**2) & (r_sq >= (self.R - H_w)**2)
+                
+                subset_t = t_cand[mask_pos]
+                subset_t[valid_r] = tp[valid_r]
+                t_cand[mask_pos] = subset_t
+
+            # Negative wall candidates (dz < 0 hits Neg wall)
+            mask_neg = valid_dz & (dz < 0)
+            if np.any(mask_neg):
+                tn = t_neg[mask_neg]
+                t_sub = tn
+                dx_s, dy_s = dx[mask_neg], dy[mask_neg]
+                hx = ox + t_sub * dx_s
+                hy = oy + t_sub * dy_s
+                center_y = self.R - self.h
+                r_sq = hx**2 + (hy - center_y)**2
+                H_w = 1000.0 * 1609.34
+                valid_r = (r_sq <= self.R**2) & (r_sq >= (self.R - H_w)**2)
+                
+                subset_t = t_cand[mask_neg]
+                subset_t[valid_r] = tn[valid_r]
+                t_cand[mask_neg] = subset_t
+            
+            # Filter valid
+            valid_t = (t_cand > 1e-6)
+            t[valid_t] = t_cand[valid_t]
+            
+        return t[0] if is_single else t
+
+    def get_atmospheric_effects(self, t_hits, ray_origin, ray_directions, time_sec=0.0, use_shadows=True):
+        """
+        Analytical integral of exponential density.
         """
         is_single = ray_directions.ndim == 1
         if is_single:
@@ -177,29 +324,96 @@ class Renderer:
             t_hits = np.atleast_1d(t_hits)
             
         dx, dy, dz = ray_directions[:, 0], ray_directions[:, 1], ray_directions[:, 2]
-        r_obs = self.h # Observer distance from floor
+        ox, oy, oz = ray_origin
+        
+        r_obs = self.h # This was assuming origin=(0,0,0) and looking relatively.
+        # If origin is arbitrary, r_obs is distance from floor? 
+        # NO. The "Atmosphere" is defined relative to the Ring Floor at y = 0 (in local frame).
+        # So "height" h = y coordinate (approx).
+        # Actually in our frame: Center is at (0, R-h, 0).
+        # The floor is at radius R.
+        # Ray origin P = (ox, oy, oz).
+        # Radius r = sqrt(ox^2 + (oy - (R-h))^2).
+        # Height above floor H = R - r.
+        
+        # HOWEVER, the 'flat earth' approximation used here for integration 
+        # assumes h_start = self.h (eye height) and flat scaling.
+        # For full correctness with arbitrary origin, we should compute h_start properly.
+        # But to be minimally invasive while fixing the 'z' clipping, let's stick to 
+        # fixing the geometrical bounds first.
+        
+        # For integration start height:
+        # We assume the camera is at y=0 (eye level). If we move the camera 
+        # significantly in Y, we would need to recalc r_obs.
+        # But the specific bug is about Z-clipping boundaries being wrong if oz != 0.
+        
         R_minus_h = self.R - self.h
         
         # 1. Geometric Boundaries
         # Radial boundaries: inner (R-Ha) and outer (R)
+        # origin (ox, oy)
+        # ray P(t) = O + tD
+        # Intersection with cylinder |P(t) - C|^2 = r^2
+        # C = (0, R-h)
+        # (ox + t*dx)^2 + (oy + t*dy - (R-h))^2 = r^2
+        # Let oy' = oy - (R-h)
+        # (ox + t*dx)^2 + (oy' + t*dy)^2 = r^2
+        # t^2(dx^2+dy^2) + 2t(ox*dx + oy'*dy) + ox^2 + oy'^2 - r^2 = 0
+        
+        oy_prime = oy - R_minus_h
         a = dx**2 + dy**2
-        b = -dy * R_minus_h
+        b = 2.0 * (ox * dx + oy_prime * dy)
+        c_term = ox**2 + oy_prime**2
+        
+        # Inner cylinder (R - Ha)
         r_inner = self.R - self.H_a
-        c_inner = R_minus_h**2 - r_inner**2
-        disc_i = b**2 - a*c_inner
+        c_inner = c_term - r_inner**2
+        disc_i = b**2 - 4.0 * a*c_inner
         mask_i = (a > 1e-12) & (disc_i >= 0)
         t_i1 = np.full_like(t_hits, np.inf)
         t_i2 = np.full_like(t_hits, np.inf)
         if np.any(mask_i):
             sq_i = np.sqrt(disc_i[mask_i])
-            t_i1[mask_i] = (-b[mask_i] - sq_i) / a[mask_i]
-            t_i2[mask_i] = (-b[mask_i] + sq_i) / a[mask_i]
+            t_i1[mask_i] = (-b[mask_i] - sq_i) / (2.0 * a[mask_i])
+            t_i2[mask_i] = (-b[mask_i] + sq_i) / (2.0 * a[mask_i])
 
         # Width boundary (Rim Walls at +/- W/2)
+        # z(t) = oz + t*dz.  Bounds +/- W/2.
+        # t = (+/- W/2 - oz) / dz
+        # We want the positive t that exits the volume.
+        
         t_z_exit = np.full_like(t_hits, np.inf)
-        abs_dz = np.abs(dz)
-        m_z = abs_dz > 1e-12
-        t_z_exit[m_z] = (self.W / 2.0) / abs_dz[m_z]
+        t_z_exit = np.full_like(t_hits, np.inf)
+        
+        # We only care about forward intersections (t > 0)
+        # Since we are inside, exactly one of these will be positive for any non-zero dz?
+        # If dz > 0, t_p is positive (assuming oz < W/2). t_n is negative.
+        # If dz < 0, t_n is positive (assuming oz > -W/2). t_p is negative.
+        
+        # So we just take the max? No, max might catch the backwards one if we are outside?
+        # But we assume inside.
+        
+        # Let's use robust selection:
+            # We want min positive t?
+            # If we are inside, there is only one positive t for a line.
+            # If dz=0, both inf.
+             
+            # Using simple branchless for "inside":
+            # t = (W/2 - oz) / dz if dz > 0
+            # t = (-W/2 - oz) / dz if dz < 0
+            
+            # This is equivalent to: abs(W/2 - oz*sgn(dz)) / abs(dz) ? No.
+            
+        term = np.zeros_like(dz)
+        mask_pos = dz > 1e-12
+        mask_neg = dz < -1e-12
+        
+        term[mask_pos] = (self.W / 2.0 - oz) / dz[mask_pos]
+        term[mask_neg] = (-self.W / 2.0 - oz) / dz[mask_neg]
+        # If dz ~ 0, term stays 0 (but we initialize t_z_exit to inf)
+        
+        t_z_exit[mask_pos | mask_neg] = term[mask_pos | mask_neg]
+
 
         # 2. Segment Identification
         looking_up = dy > 0
@@ -210,7 +424,7 @@ class Renderer:
         # We ensure t_i2 is finite to avoid NaN in the width check
         far_mask = looking_up & (t_hits > t_i2) & np.isfinite(t_i2)
         if np.any(far_mask):
-            z_at_i2 = t_i2[far_mask] * dz[far_mask]
+            z_at_i2 = oz + t_i2[far_mask] * dz[far_mask]
             # Use a temporary mask to avoid indexing errors
             within_z = np.abs(z_at_i2) <= self.W / 2.0
             updated_mask = far_mask.copy()
@@ -325,11 +539,15 @@ class Renderer:
         
         t_sun = self.intersect_sun(ray_origin, ray_directions)
         t_ring = self.intersect_ring(ray_origin, ray_directions)
+        t_wall = self.intersect_rim_walls(ray_origin, ray_directions)
+        t_ss = self.intersect_shadow_squares(ray_origin, ray_directions, time_sec) if use_shadows else np.full(num_rays, np.inf)
         
         # Primary hit logic
-        hit_t = np.minimum(t_sun, t_ring)
-        hit_is_sun = (t_sun <= t_ring) & (t_sun < np.inf)
-        hit_is_ring = (t_ring < t_sun) & (t_ring < np.inf)
+        hit_t = np.minimum(t_sun, np.minimum(t_ring, np.minimum(t_ss, t_wall)))
+        hit_is_sun = (t_sun <= hit_t) & (t_sun < np.inf)
+        hit_is_ring = (t_ring <= hit_t) & (t_ring < np.inf) & ~hit_is_sun
+        hit_is_wall = (t_wall <= hit_t) & (t_wall < np.inf) & ~hit_is_sun & ~hit_is_ring
+        hit_is_ss = (t_ss <= hit_t) & (t_ss < np.inf) & ~hit_is_sun & ~hit_is_ring & ~hit_is_wall
         hit_is_sky = hit_t == np.inf
         
         surface_colors = np.zeros((num_rays, 3))
@@ -337,12 +555,23 @@ class Renderer:
         # 1. Sun Color
         sun_mask = hit_is_sun
         if np.any(sun_mask):
-            sun_p = ray_origin + t_sun[sun_mask][:, None] * ray_directions[sun_mask]
-            s_sun = self.get_shadow_factor(sun_p, time_sec) if use_shadows else 1.0
-            s_sun = np.atleast_1d(s_sun)
-            surface_colors[sun_mask] = np.array([1.0, 1.0, 0.8]) * s_sun[:, None]
+            # Sun is an emitter; in a unified geometric model, if we hit the sun, 
+            # we are by definition not occluded by a shadow square (because t_ss > t_sun).
+            surface_colors[sun_mask] = np.array([1.0, 1.0, 0.8])
             
-            # 2. Ring Color
+        # 2. Shadow Square Color (Occlusion)
+        ss_mask = hit_is_ss
+        if np.any(ss_mask):
+            # Shadow squares are opaque and black (back side)
+            surface_colors[ss_mask] = np.array([0.0, 0.0, 0.0])
+            
+        # 3. Rim Wall Color
+        wall_mask = hit_is_wall
+        if np.any(wall_mask):
+            # Dark grey rock
+            surface_colors[wall_mask] = np.array([0.1, 0.1, 0.15])
+            
+        # 3. Ring Color
         ring_mask = hit_is_ring
         if np.any(ring_mask):
             hit_p = ray_origin + t_ring[ring_mask][:, None] * ray_directions[ring_mask]
@@ -369,7 +598,7 @@ class Renderer:
         eff_t[hit_is_sky] = self.R * 3.0
 
         
-        transmittance, in_scattering = self.get_atmospheric_effects(eff_t, ray_directions, time_sec, use_shadows)
+        transmittance, in_scattering = self.get_atmospheric_effects(eff_t, ray_origin, ray_directions, time_sec, use_shadows)
         
         # Final blend
 

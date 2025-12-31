@@ -71,7 +71,7 @@ def test_atmospheric_depth_scaling():
         [1.0, 0.02, 0.0]  # Near Horizon (Long path ~ 50 airmasses)
     ])
     
-    t, s = renderer.get_atmospheric_effects(np.array([2.0, 1e12]), ray_dirs)
+    t, s = renderer.get_atmospheric_effects(np.array([2.0, 1e12]), np.array([0,0,0]), ray_dirs)
     
     # Downward ray: Transmittance should be near 1.0
     assert np.all(t[0] > 0.999)
@@ -188,11 +188,13 @@ def test_toggles_effects():
     origin = np.array([0,0,0])
     
     # 1. Atmosphere Toggle (Scattering)
-    # Look Axial (+Z) - pure sky
-    ray_axial = np.array([0.0, 0.0, 1.0])
-    color_atmo_off = renderer.get_color(origin, ray_axial, use_atmosphere=False)
-    assert np.all(color_atmo_off == 0), "Sky should be black without atmosphere"
-    color_atmo_on = renderer.get_color(origin, ray_axial, use_atmosphere=True)
+    # Look Diagonal (Space) - miss Ring and Wall
+    ray_space = np.array([0.0, 1.0, 100.0])
+    ray_space /= np.linalg.norm(ray_space)
+    
+    color_atmo_off = renderer.get_color(origin, ray_space, use_atmosphere=False)
+    assert np.all(color_atmo_off == 0), "Space should be black without atmosphere"
+    color_atmo_on = renderer.get_color(origin, ray_space, use_atmosphere=True)
     assert color_atmo_on[2] > 0.05, "Sky should be blue with atmosphere"
     
     # 2. Atmosphere Toggle (Extinction)
