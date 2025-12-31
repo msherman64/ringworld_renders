@@ -7,12 +7,23 @@ from .core import Renderer
 # and keeping the old image visible.
 CSS = """
 .gradio-container { background-color: #0b0f19 !important; color: #e5e7eb !important; }
-#output_img { background-color: #0b0f19 !important; border-radius: 8px; overflow: hidden; }
+#output_img { background-color: #0b0f19 !important; border-radius: 8px; overflow: hidden; border: none !important; }
 #output_img img { object-fit: contain; }
-/* Hide the 'clearing' state and loading spinner to prevent flicker */
-.pending { opacity: 1 !important; }
-.loading { display: none !important; }
+
+/* Keep the image fully opaque and sharp while generating */
+.generating, .pending { 
+    opacity: 1 !important; 
+    filter: none !important; 
+    transition: none !important;
+}
+
+/* Hide ALL Gradio loading indicators, spinners, and progress bars */
+.loading, .progress-view, .loader, .spinner { 
+    display: none !important; 
+    visibility: hidden !important; 
+}
 """
+
 
 def create_ui():
 
@@ -68,7 +79,9 @@ def create_ui():
                         shine_toggle = gr.Checkbox(value=True, label="Ring-shine", info="Arch illumination")
             
             with gr.Column(scale=2):
-                output_img = gr.Image(label="Physically Accurate Viewport", interactive=False)
+                output_img = gr.Image(label="Physically Accurate Viewport", 
+                                    interactive=False, elem_id="output_img")
+
         
         inputs = [fov_slider, look_x, look_y, look_z, time_slider, 
                   atmosphere_toggle, shad_toggle, shine_toggle, res_slider]
@@ -84,11 +97,12 @@ def create_ui():
         # Auto-render on any change
         for input_comp in inputs:
             if hasattr(input_comp, "change"):
-                input_comp.change(fn=render_frame, inputs=inputs, outputs=output_img, trigger_mode="always_last")
+                input_comp.change(fn=render_frame, inputs=inputs, outputs=output_img, 
+                                 trigger_mode="always_last", show_progress="hidden")
 
         
         # Initial render
-        demo.load(fn=render_frame, inputs=inputs, outputs=output_img)
+        demo.load(fn=render_frame, inputs=inputs, outputs=output_img, show_progress="hidden")
 
 
     return demo
