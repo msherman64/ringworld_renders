@@ -1,15 +1,11 @@
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "ringworld_renders"
+name = "ringworld-renders"
 version = "0.1.0"
-description = "A physics engine and renderer for Ringworld megastructures"
-dependencies = [
-    "numpy",
-    "pillow",
-]
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
 
-[project.scripts]
-ringworld-render = "ringworld_renders.__main__:main"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
