@@ -154,6 +154,46 @@ def test_default_viewpoint_content():
     mid_pixel = img[16, 16]
     assert mid_pixel[2] > 50, f"Center blue {mid_pixel[2]} should be higher due to airmass."
 
+def test_toggles_effects():
+    """
+    Verify that toggles for scattering, extinction, and ring-shine have measurable effects.
+    """
+    renderer = Renderer()
+    origin = np.array([0,0,0])
+    
+    # 1. Scattering Toggle
+    # Look Axial (+Z) - pure sky
+    ray_axial = np.array([0.0, 0.0, 1.0])
+    color_scat_off = renderer.get_color(origin, ray_axial, use_scattering=False)
+    assert np.all(color_scat_off == 0), "Sky should be black without scattering"
+    color_scat_on = renderer.get_color(origin, ray_axial, use_scattering=True)
+    assert color_scat_on[2] > 0.05, "Sky should be blue with scattering"
+    
+    # 2. Extinction Toggle
+    # Look Spinward (+X) - hits horizon at ~773km
+    ray_spin = np.array([1.0, 0.0, 0.0])
+    # Disable scattering/shadows/shine for a clear extinction baseline
+    color_ext_off = renderer.get_color(origin, ray_spin, time_sec=0.0, 
+                                      use_extinction=False, use_scattering=False, 
+                                      use_shadows=False, use_ring_shine=False)
+    # Mock green [0.2, 0.5, 0.2]
+    assert np.allclose(color_ext_off, [0.2, 0.5, 0.2], atol=0.01)
+    
+    color_ext_on = renderer.get_color(origin, ray_spin, time_sec=0.0, 
+                                     use_extinction=True, use_scattering=False, 
+                                     use_shadows=False, use_ring_shine=False)
+    assert np.sum(color_ext_on) < np.sum(color_ext_off), "Horizon should be dimmed by extinction"
+
+    # 3. Ring-shine Toggle (Ground at Noon)
+    # Ground at noon with use_shadows=False should be exactly [0.2, 0.5, 0.2] * (1.0 + ambient)
+    color_shine_off = renderer.get_color(origin, np.array([0, -1, 0]), time_sec=0.0, 
+                                        use_ring_shine=False, use_shadows=False)
+    assert np.allclose(color_shine_off, [0.2, 0.5, 0.2], atol=0.01)
+    
+    color_shine_on = renderer.get_color(origin, np.array([0, -1, 0]), time_sec=0.0, 
+                                       use_ring_shine=True, use_shadows=False)
+    assert np.all(color_shine_on > color_shine_off), "Noon ground should have ring-shine ambient lift"
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__])

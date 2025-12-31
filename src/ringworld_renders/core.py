@@ -268,7 +268,11 @@ class Renderer:
             # 0.1 ambient sky glow from the rest of the atmosphere (physically based scattering)
             in_scattering *= (s_sky + 0.1)[:, None]
             
-        final_colors = surface_colors * transmittance[:, None] + in_scattering
+        # Final blend
+        transmittance_applied = transmittance if use_extinction else np.ones_like(transmittance)
+        scattering_applied = in_scattering if use_scattering else np.zeros_like(in_scattering)
+        
+        final_colors = surface_colors * transmittance_applied[:, None] + scattering_applied
         
         if is_single:
             return np.clip(final_colors[0], 0.0, 1.0)
