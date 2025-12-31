@@ -11,11 +11,14 @@ class Renderer:
         self.W = width_miles * MILES_TO_METERS
         self.h = eye_height_miles * MILES_TO_METERS
         
-        # Atmosphere parameters
+        # Atmosphere parameters (Rayleigh 1/lambda^4 scaling)
         self.H_a = 1000.0 * MILES_TO_METERS # 1000 mile Rim Walls
         self.H_scale = 5.3 * MILES_TO_METERS # Scale height for 1G
-        self.tau_zenith = 0.06 # Total optical depth at zenith (integrated 0 to inf)
+        # Rayleigh spectral scaling relative to blue (450nm): [650nm, 550nm, 450nm]
+        # powers = (450 / [650, 550, 450])^4
+        self.tau_zenith = np.array([0.0138, 0.027, 0.06])
         self.sky_color = np.array([0.5, 0.7, 1.0]) # Typical Rayleigh blue
+
 
         
         # Sun parameters
@@ -236,8 +239,10 @@ class Renderer:
             return term
 
         # NEAR SEGMENT Optical Depth
-        tau_near = self.tau_zenith * integrated_tau(r_obs, seg_near_end, dy)
+        itau = integrated_tau(r_obs, seg_near_end, dy)
+        tau_near = self.tau_zenith[None, :] * itau[:, None]
         T_near = np.exp(-tau_near)
+
 
         
         # FAR SEGMENT Optical Depth
@@ -253,36 +258,55 @@ class Renderer:
             l_far = np.minimum(t_hits[far_mask], t_z_exit[far_mask]) - t_i2[far_mask]
             l_far = np.maximum(l_far, 0.0)
             
+            # Cap far-side path by reaching the ground (h=0) if looking down
+            # Dist from H_a to 0 at cos_theta_far is -H_a / cos_theta_far
+            m_down = cos_theta_far < -1e-6
+            if np.any(m_down):
+                l_limit = -self.H_a / cos_theta_far[m_down]
+                l_far[m_down] = np.minimum(l_far[m_down], l_limit)
+            
             # Start far integration at the Far Ceiling (h = H_a)
-            tau_far[far_mask] = self.tau_zenith * integrated_tau(self.H_a, l_far, cos_theta_far)
+            tau_far[far_mask] = self.tau_zenith[None, :] * integrated_tau(self.H_a, l_far, cos_theta_far)[:, None]
+
         
         T_far = np.exp(-tau_far)
         
-        # 4. Shadowing (Sample at densest point of each segment: the start)
-        s_near = np.ones_like(tau_near)
+        # 4. Phase Function and Shadowing
+        # Rayleigh Phase Function: P(theta) = 3/4 * (1 + cos^2 theta)
+        # Sun is at self.ring_center, which is effectively (0, 1, 0) from the origin
+        sun_dir = self.ring_center / np.linalg.norm(self.ring_center)
+        cos_theta = np.sum(ray_directions * sun_dir[None, :], axis=1)
+        phase = 0.75 * (1.0 + cos_theta**2)
+        
+        # Shadowing: Sample at a representative height (Scale Height) 
+        # to capture volumetric light even if the observer is in a shadow.
+        s_near = np.ones(tau_near.shape[0])
         if use_shadows:
-            s_near = np.atleast_1d(self.get_shadow_factor(np.array([0,0,0]), time_sec))
+            # Point at approx scale height in the ray direction
+            p_near = (self.H_scale / np.maximum(np.abs(dy), 0.1))[:, None] * ray_directions
+            s_near = np.atleast_1d(self.get_shadow_factor(p_near, time_sec))
             
-        scat_near = self.sky_color[None, :] * (1.0 - T_near[:, None]) * (s_near + 0.1)[:, None]
+        scat_near = self.sky_color[None, :] * (1.0 - T_near) * (s_near + 0.1)[:, None] * phase[:, None]
         
         scat_far = np.zeros_like(scat_near)
         if np.any(far_mask):
             # Sample far-side shadow at the midpoint of the air segment
-            # l_far is already sized to far_mask
             t_mid_far = t_i2[far_mask] + l_far / 2.0
             p_far = t_mid_far[:, None] * ray_directions[far_mask]
             s_far = np.atleast_1d(self.get_shadow_factor(p_far, time_sec))
-            scat_far[far_mask] = self.sky_color[None, :] * (1.0 - T_far[far_mask, None]) * (s_far + 0.1)[:, None]
+            # Phase is the same (ray direction doesn't change)
+            scat_far[far_mask] = self.sky_color[None, :] * (1.0 - T_far[far_mask]) * (s_far + 0.1)[:, None] * phase[far_mask, None]
 
 
 
-        # Final Blend
-        total_scat = scat_near + (scat_far * T_near[:, None])
+
+        total_scat = scat_near + (scat_far * T_near)
         total_trans = T_near * T_far
         
         if is_single:
-            return total_trans[0], total_scat[0]
+            return total_trans[0, :], total_scat[0, :]
         return total_trans, total_scat
+
 
 
 
@@ -317,22 +341,24 @@ class Renderer:
             s_sun = np.atleast_1d(s_sun)
             surface_colors[sun_mask] = np.array([1.0, 1.0, 0.8]) * s_sun[:, None]
             
-        # 2. Ring Color
+            # 2. Ring Color
         ring_mask = hit_is_ring
         if np.any(ring_mask):
             hit_p = ray_origin + t_ring[ring_mask][:, None] * ray_directions[ring_mask]
             
-            # Ring-shine: proportional to visible sunlit arch
-            # At any time, roughly 50% of the ring is lit, but from the night side,
-            # we see the 'day' side of the arch. 
-            # We use a constant ambient term to represent this global illumination.
-            ambient = 0.05 if use_ring_shine else 0.0
+            # Dynamic Ring-shine: peaking at midnight (12h) when the arch is overhead.
+            # At Noon (0s), the arch is backlit/blocked.
+            SOLAR_DAY = 24.0 * 3600.0
+            time_angle = 2.0 * np.pi * time_sec / SOLAR_DAY
+            # Scale from 0.02 (noon) to 0.10 (midnight)
+            ambient_shine = 0.06 - 0.04 * np.cos(time_angle) if use_ring_shine else 0.0
             
             s_factor = self.get_shadow_factor(hit_p, time_sec) if use_shadows else 1.0
             s_factor = np.atleast_1d(s_factor)
             
             # Mock green surface with physical light interaction
-            surface_colors[ring_mask] = np.array([0.2, 0.5, 0.2]) * (s_factor + ambient)[:, None]
+            surface_colors[ring_mask] = np.array([0.2, 0.5, 0.2]) * (s_factor + ambient_shine)[:, None]
+
 
             
         # 3. Atmospheric Effects
@@ -349,7 +375,8 @@ class Renderer:
         transmittance_applied = transmittance if use_atmosphere else np.ones_like(transmittance)
         scattering_applied = in_scattering if use_atmosphere else np.zeros_like(in_scattering)
         
-        final_colors = surface_colors * transmittance_applied[:, None] + scattering_applied
+        final_colors = surface_colors * transmittance_applied + scattering_applied
+
         
         if is_single:
             return np.clip(final_colors[0], 0.0, 1.0)

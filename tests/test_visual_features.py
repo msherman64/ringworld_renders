@@ -96,14 +96,14 @@ def test_ring_shine_validation():
     # Midnight ground (all shadow, just ring-shine)
     color_midnight = renderer.get_color(np.array([0,0,0]), ray_down, time_sec=12.0 * 3600)
     
-    expected_midnight = np.array([0.2, 0.5, 0.2]) * 0.05 # s_factor=0, ambient=0.05
+    expected_midnight = np.array([0.2, 0.5, 0.2]) * 0.10 # s_factor=0, ambient=0.10
     np.testing.assert_allclose(color_midnight, expected_midnight, atol=0.001)
 
 
     
     # Noon ground (no shadow, direct sun + ring-shine)
     color_noon = renderer.get_color(np.array([0,0,0]), ray_down, time_sec=0.0)
-    expected_noon = np.array([0.2, 0.5, 0.2]) * 1.05 # s_factor=1, ambient=0.05
+    expected_noon = np.array([0.2, 0.5, 0.2]) * 1.02 # s_factor=1, ambient=0.02
     np.testing.assert_allclose(color_noon, expected_noon, atol=0.001)
 
 def test_perspective_fov_scaling():
@@ -143,9 +143,12 @@ def test_far_side_atmo_doubling():
     trans_far, _ = renderer.get_atmospheric_effects(np.array([t_far_surface]), ray_up)
     
     # Validation: far side should have much more extinction (lower transmittance)
-    assert trans_far < trans_vertical * 0.95, "Far side arch should have significantly more extinction due to dual-side atmosphere."
+    # Check blue channel (most extinguished)
+    assert trans_far[2] < trans_vertical[2] * 0.95, "Far side arch should have significantly more extinction due to dual-side atmosphere."
     # With tau_zenith = 0.06, trans_vertical is ~0.94. trans_far should be ~0.94 * 0.94 = 0.88.
-    assert trans_far == pytest.approx(trans_vertical**2, rel=1e-2), "Analytical path doubling should match T_near * T_far"
+    assert np.allclose(trans_far, trans_vertical**2, rtol=1e-2), "Analytical path doubling should match T_near * T_far"
+
+
 
 def test_axial_sky_clarity():
     """
@@ -184,6 +187,74 @@ def test_axial_sky_clarity():
     # Actually, looking at 90 degrees (axial) through 500k miles of air
     # should result in an opaque blue fog with ambient glow (1.0 + 0.1 = 1.1)
     assert np.all(scat <= 1.11), f"Scattering {scat} should be stable and bounded by ambient glow."
+
+def test_sky_phase_function():
+    """
+    TDD: Verify that sky scattering follows the Rayleigh Phase Function.
+    The sky should be brighter looking near the sun than at 90 degrees to it.
+    """
+    renderer = Renderer()
+    # At noon, sun is at theta=pi/2 (roughly 'up' in local frame)
+    # 1. Looking pure UP (near sun)
+    _, scat_up = renderer.get_atmospheric_effects(np.array([100.0]), np.array([0.0, 1.0, 0.0]), time_sec=0.0)
+    # 2. Looking at horizon (90 deg to sun)
+    _, scat_horiz = renderer.get_atmospheric_effects(np.array([100.0]), np.array([1.0, 0.0, 0.0]), time_sec=0.0)
+    
+    # Rayleigh P(theta) = 3/4(1 + cos^2(theta))
+    # Near sun (theta ~ 0) -> P ~ 1.5
+    # Horizon (theta ~ 90) -> P ~ 0.75
+    # So scat_up should be ~2x brighter than scat_horiz.
+    assert np.mean(scat_up) > np.mean(scat_horiz) * 1.5, "Sky should follow Rayleigh phase function (brighter near sun)"
+
+def test_dynamic_ring_shine_midnight_noon():
+    """
+    TDD: Verify that 'ambient' ring-shine is brighter at midnight (full arch illumination)
+    than at noon (backlit/hidden arch).
+    """
+    renderer = Renderer()
+    origin = np.array([0.0, 0.0, 0.0])
+    ray_down = np.array([0.0, -1.0, 0.0])
+    
+    # 1. Midnight (approx 12hr = 43200s)
+    color_midnight = renderer.get_color(origin, ray_down, time_sec=43200.0, use_atmosphere=False, use_shadows=False)
+    # 2. Noon (0s)
+    color_noon = renderer.get_color(origin, ray_down, time_sec=0.0, use_atmosphere=False, use_shadows=False)
+    
+    # At midnight, the arch is overhead and fully lit. Ground should be brighter than noon ground.
+    assert np.mean(color_midnight) > np.mean(color_noon), "Midnight ground should be brighter due to dynamic ring-shine"
+
+
+
+def test_spectral_reddening():
+    """
+    TDD: Verify that the atmosphere implements spectral extinction (Rayleigh reddening).
+    Blue light should be extinguished faster than red light over long paths.
+    """
+    renderer = Renderer()
+    # Looking at horizon (dy=0.01)
+    # Airmass should be ~100
+    ray_horiz = np.array([1.0, 0.01, 0.0])
+    ray_horiz /= np.linalg.norm(ray_horiz)
+    
+    # Hit distance is very large (misses ground, exits ceiling)
+    t_hits = np.array([1e15]) 
+    trans, scat = renderer.get_atmospheric_effects(t_hits, ray_horiz)
+    
+    print(f"\nSpectral Extinction Debug:")
+    print(f"Ray dy: {ray_horiz[1]}")
+    print(f"Transmittance: {trans}")
+    print(f"Scattering: {scat}")
+    
+    # trans should be a 3-vector [T_r, T_g, T_b]
+    assert hasattr(trans, "__len__") and len(trans) == 3, f"Transmittance should be spectral 3-vector, got {trans}"
+    # Check that blue is extinguished more than red
+    assert trans[0] > trans[2], f"Red T {trans[0]} should be > Blue T {trans[2]}"
+    # For airmass 100, tau_b = 6.0, T_b = 0.002. tau_r = 1.38, T_r = 0.25.
+    assert trans[0] > trans[2] * 5.0, "Red transmittance should be much higher than blue (Rayleigh reddening)"
+
+
+
+
 
 
 
