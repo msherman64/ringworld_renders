@@ -38,7 +38,8 @@ class Renderer:
         
         # Observer-centric coordinate system:
         # Ring center is at (0, R - h, 0).
-        self.ring_center = np.array([0.0, self.R - self.h, 0.0])
+        self.center_y = self.R - self.h  # Cached for frequent use
+        self.ring_center = np.array([0.0, self.center_y, 0.0])
 
         # Sun parameters
         self.R_sun = constants.SUN_RADIUS_METERS
@@ -172,7 +173,7 @@ class Renderer:
         ox, oy, oz = ray_origin
         
         R_ss = self.R_ss
-        center_y = self.R - self.h
+        center_y = self.center_y
         
         # Intersection with cylinder (r = R_ss)
         # (x - cx)^2 + (y - cy)^2 = R^2
@@ -238,7 +239,7 @@ class Renderer:
             hit_points = hit_points[None, :]
             
         # Center of the ring in observer-centric frame
-        center_y = self.R - self.h
+        center_y = self.center_y
         
         # Angular position theta
         theta = np.arctan2(hit_points[:, 0], -(hit_points[:, 1] - center_y))
@@ -310,12 +311,8 @@ class Renderer:
                 hx = ox + t_sub * dx_s
                 hy = oy + t_sub * dy_s
                 
-                # Center for radius check is (0, R-h, 0)
-                center_y = self.R - self.h
-                r_sq = hx**2 + (hy - center_y)**2
-                
-                H_w = 1000.0 * constants.MILES_TO_METERS
-                valid_r = (r_sq <= self.R**2) & (r_sq >= (self.R - H_w)**2)
+                r_sq = hx**2 + (hy - self.center_y)**2
+                valid_r = (r_sq <= self.R**2) & (r_sq >= (self.R - constants.RIM_WALL_HEIGHT_METERS)**2)
                 
                 subset_t = t_cand[mask_pos]
                 subset_t[valid_r] = tp[valid_r]
@@ -329,10 +326,8 @@ class Renderer:
                 dx_s, dy_s = dx[mask_neg], dy[mask_neg]
                 hx = ox + t_sub * dx_s
                 hy = oy + t_sub * dy_s
-                center_y = self.R - self.h
-                r_sq = hx**2 + (hy - center_y)**2
-                H_w = 1000.0 * constants.MILES_TO_METERS
-                valid_r = (r_sq <= self.R**2) & (r_sq >= (self.R - H_w)**2)
+                r_sq = hx**2 + (hy - self.center_y)**2
+                valid_r = (r_sq <= self.R**2) & (r_sq >= (self.R - constants.RIM_WALL_HEIGHT_METERS)**2)
                 
                 subset_t = t_cand[mask_neg]
                 subset_t[valid_r] = tn[valid_r]
@@ -381,7 +376,6 @@ class Renderer:
         c_term = ox**2 + oy_prime**2
         
         # Inner cylinder (R - Ha)
-        r_inner = self.R - self.H_a
         r_inner = self.R - self.H_a
         c_inner = c_term - r_inner**2
         
@@ -568,7 +562,7 @@ class Renderer:
                 valid_dirs = ray_directions[ss_mask]
                 hits = ray_origin + t_ss[ss_mask][:, None] * valid_dirs
                 
-                center_y = self.R - self.h
+                center_y = self.center_y
                 theta = np.arctan2(hits[:, 0], -(hits[:, 1] - center_y))
                 
                 omega = self.omega_ss
