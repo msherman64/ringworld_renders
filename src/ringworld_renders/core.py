@@ -12,9 +12,11 @@ class Renderer:
         self.h = eye_height_miles * MILES_TO_METERS
         
         # Atmosphere parameters
-        self.H_a = 100.0 * MILES_TO_METERS # 100 mile ceiling
-        self.tau_zenith = 0.15 # Better Rayleigh blue-out
+        self.H_a = 1000.0 * MILES_TO_METERS # 1000 mile Rim Walls
+        self.H_scale = 5.3 * MILES_TO_METERS # Scale height for 1G
+        self.tau_zenith = 0.06 # Total optical depth at zenith (integrated 0 to inf)
         self.sky_color = np.array([0.5, 0.7, 1.0]) # Typical Rayleigh blue
+
         
         # Sun parameters
         self.R_sun = 432474.0 * MILES_TO_METERS
@@ -53,7 +55,7 @@ class Renderer:
         c = ox**2 + oy**2 - 2.0 * oy * R_minus_h - h * (2.0 * R - h)
         
         discriminant = b**2 - 4.0 * a * c
-        valid_mask = discriminant >= 0
+        valid_mask = (a > 1e-12) & (discriminant >= 0)
         
         t = np.full(ray_directions.shape[0], np.inf)
         
@@ -61,6 +63,7 @@ class Renderer:
             sqrt_disc = np.sqrt(discriminant[valid_mask])
             t1 = (-b[valid_mask] - sqrt_disc) / (2.0 * a[valid_mask])
             t2 = (-b[valid_mask] + sqrt_disc) / (2.0 * a[valid_mask])
+
             
             # Select smallest positive t
             best_t = np.full(t1.shape, np.inf)
@@ -98,16 +101,18 @@ class Renderer:
         c = np.sum(oc**2) - radius**2
         
         discriminant = b**2 - 4.0 * a * c
-        valid_mask = discriminant >= 0
+        valid_mask = (a > 1e-12) & (discriminant >= 0)
         
         t = np.full(ray_directions.shape[0], np.inf)
         
         if np.any(valid_mask):
-            t1 = (-b[valid_mask] - np.sqrt(discriminant[valid_mask])) / (2.0 * a[valid_mask])
+            sqrt_disc = np.sqrt(discriminant[valid_mask])
+            t1 = (-b[valid_mask] - sqrt_disc) / (2.0 * a[valid_mask])
             m = t1 > 1e-6
             t_valid = np.full(t1.shape, np.inf)
             t_valid[m] = t1[m]
             t[valid_mask] = t_valid
+
             
         return t[0] if is_single else t
 
@@ -157,53 +162,117 @@ class Renderer:
                 
         return shadow_factor[0] if is_single else shadow_factor
 
-    def get_atmospheric_effects(self, t_hits, ray_directions):
+    def get_atmospheric_effects(self, t_hits, ray_directions, time_sec=0.0, use_shadows=True):
         """
-        Vectorized atmospheric effects using a robust shell intersection.
+        Analytical integral of exponential density: tau = tau_z * integral[e^(-h(s)/H) ds] / H.
+        This provides physical grounding and eliminates banding artifacts.
         """
         is_single = ray_directions.ndim == 1
         if is_single:
             ray_directions = ray_directions[None, :]
             t_hits = np.atleast_1d(t_hits)
             
-        dx = ray_directions[:, 0]
-        dy = ray_directions[:, 1]
-        
-        # Intersection with atmosphere ceiling (Cylinder)
+        dx, dy, dz = ray_directions[:, 0], ray_directions[:, 1], ray_directions[:, 2]
+        r_obs = self.h # Observer distance from floor
         R_minus_h = self.R - self.h
-        r_c = self.R - self.H_a
         
-        # a*t^2 + 2*b*t + c = 0 (origin at 0,0,0)
+        # 1. Geometric Boundaries
+        # Radial boundaries: inner (R-Ha) and outer (R)
         a = dx**2 + dy**2
         b = -dy * R_minus_h
-        c = R_minus_h**2 - r_c**2
-        
-        # Since we are inside the ceiling radius (r_c < R-h), 
-        # looking 'up' (dy > 0) will eventually hit the ceiling.
-        discriminant = b**2 - a*c
-        valid_mask = (a > 1e-9) & (discriminant >= 0)
-        
-        t_ceiling = np.full_like(t_hits, 1e12) # Far away if no hit
-        if np.any(valid_mask):
-            # We want the intersection point between observer and center
-            t_vals = (-b[valid_mask] - np.sqrt(discriminant[valid_mask])) / a[valid_mask]
-            # If t is negative, we are looking away from the shell
-            t_ceiling[valid_mask] = np.maximum(t_vals, 0.0)
+        r_inner = self.R - self.H_a
+        c_inner = R_minus_h**2 - r_inner**2
+        disc_i = b**2 - a*c_inner
+        mask_i = (a > 1e-12) & (disc_i >= 0)
+        t_i1 = np.full_like(t_hits, np.inf)
+        t_i2 = np.full_like(t_hits, np.inf)
+        if np.any(mask_i):
+            sq_i = np.sqrt(disc_i[mask_i])
+            t_i1[mask_i] = (-b[mask_i] - sq_i) / a[mask_i]
+            t_i2[mask_i] = (-b[mask_i] + sq_i) / a[mask_i]
 
-        # Path length is minimum of hit distance and ceiling distance
-        path_in_atmosphere = np.minimum(t_hits, t_ceiling)
+        # Width boundary (Rim Walls at +/- W/2)
+        t_z_exit = np.full_like(t_hits, np.inf)
+        abs_dz = np.abs(dz)
+        m_z = abs_dz > 1e-12
+        t_z_exit[m_z] = (self.W / 2.0) / abs_dz[m_z]
+
+        # 2. Segment Identification
+        looking_up = dy > 0
+        seg_near_end = np.minimum(t_hits, t_z_exit)
+        seg_near_end[looking_up] = np.minimum(seg_near_end[looking_up], t_i1[looking_up])
         
-        tau = self.tau_zenith * (path_in_atmosphere / self.H_a)
-        transmittance = np.exp(-tau)
-        in_scattering = self.sky_color[None, :] * (1.0 - transmittance[:, None])
+        # Far segment: enters at t_i2, exits at min(t_hit, t_z_exit, t_o2??)
+        # Simplified: Far segment is t_i2 to t_hit, clipped by Z
+        # For Ringworld, we ignore air exiting the 'outer' radius R because it's vacuum there too
+        far_mask = looking_up & (t_hits > t_i2) & (np.abs(t_i2*dz) <= self.W/2.0)
+        
+        # 3. Analytical Exponential Integration
+        def integrated_tau(h0, L, cos_theta):
+            # Integral of e^(-(h0 + s*cos_theta)/H) ds from 0 to L
+            # = e^(-h0/H) * [ (1 - e^(-L*cos_theta/H)) / (cos_theta/H) ]
+            H = self.H_scale
+            # Handle horizontal rays (cos_theta near 0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                term = np.where(np.abs(cos_theta) < 1e-6,
+                                L / H, # Limit as cos_theta -> 0
+                                (1.0 - np.exp(-L * cos_theta / H)) / cos_theta)
+            return np.exp(-h0 / H) * term
+
+        # NEAR SEGMENT Optical Depth
+        tau_near = self.tau_zenith * integrated_tau(r_obs, seg_near_end, dy)
+        T_near = np.exp(-tau_near)
+        
+        # FAR SEGMENT Optical Depth
+        tau_far = np.zeros_like(tau_near)
+        if np.any(far_mask):
+            # Recalculate local vertical at the far side entry point P_far = t_i2 * D
+            p_far = t_i2[far_mask][:, None] * ray_directions[far_mask]
+            # Local UP at P_far is normalize(R_center - P_far)
+            vec_to_center = self.ring_center - p_far
+            up_far = vec_to_center / np.linalg.norm(vec_to_center, axis=1, keepdims=True)
+            cos_theta_far = np.sum(ray_directions[far_mask] * up_far, axis=1)
+            
+            l_far = np.minimum(t_hits[far_mask], t_z_exit[far_mask]) - t_i2[far_mask]
+            l_far = np.maximum(l_far, 0.0)
+            
+            # Start far integration at the Far Ceiling (h = H_a)
+            tau_far[far_mask] = self.tau_zenith * integrated_tau(self.H_a, l_far, cos_theta_far)
+        
+        T_far = np.exp(-tau_far)
+        
+        # 4. Shadowing (Sample at densest point of each segment: the start)
+        s_near = np.ones_like(tau_near)
+        if use_shadows:
+            s_near = np.atleast_1d(self.get_shadow_factor(np.array([0,0,0]), time_sec))
+            
+        scat_near = self.sky_color[None, :] * (1.0 - T_near[:, None]) * (s_near + 0.1)[:, None]
+        
+        scat_far = np.zeros_like(scat_near)
+        if np.any(far_mask):
+            # Sample far-side shadow at the midpoint of the air segment
+            # l_far is already sized to far_mask
+            t_mid_far = t_i2[far_mask] + l_far / 2.0
+            p_far = t_mid_far[:, None] * ray_directions[far_mask]
+            s_far = np.atleast_1d(self.get_shadow_factor(p_far, time_sec))
+            scat_far[far_mask] = self.sky_color[None, :] * (1.0 - T_far[far_mask, None]) * (s_far + 0.1)[:, None]
+
+
+
+        # Final Blend
+        total_scat = scat_near + (scat_far * T_near[:, None])
+        total_trans = T_near * T_far
         
         if is_single:
-            return transmittance[0], in_scattering[0]
-        return transmittance, in_scattering
+            return total_trans[0], total_scat[0]
+        return total_trans, total_scat
+
+
+
+
 
     def get_color(self, ray_origin, ray_directions, time_sec=0.0, 
-                  use_scattering=True, use_extinction=True, 
-                  use_shadows=True, use_ring_shine=True):
+                  use_atmosphere=True, use_shadows=True, use_ring_shine=True):
         """
         Fully vectorized shader.
         """
@@ -237,40 +306,31 @@ class Renderer:
             hit_p = ray_origin + t_ring[ring_mask][:, None] * ray_directions[ring_mask]
             
             # Ring-shine: proportional to visible sunlit arch
-            # Simplified: scale by how much the 'average' sky is lit
-            # Ring-shine is roughly albedo * (view factor of sunlit arch)
-            # A simple proxy: 1.0 at noon, 0.05 at midnight (as specified by user's 'multi moons' goal)
-            # We derive this from the global shadow state
-            s_zenith = self.get_shadow_factor(self.ring_center[None, :], time_sec)
-            s_zenith = np.atleast_1d(s_zenith)[0]
-            ambient = 0.05 * s_zenith if use_ring_shine else 0.0
+            # At any time, roughly 50% of the ring is lit, but from the night side,
+            # we see the 'day' side of the arch. 
+            # We use a constant ambient term to represent this global illumination.
+            ambient = 0.05 if use_ring_shine else 0.0
             
             s_factor = self.get_shadow_factor(hit_p, time_sec) if use_shadows else 1.0
             s_factor = np.atleast_1d(s_factor)
             
             # Mock green surface with physical light interaction
             surface_colors[ring_mask] = np.array([0.2, 0.5, 0.2]) * (s_factor + ambient)[:, None]
+
             
         # 3. Atmospheric Effects
         # We process ALL rays (including sky)
-        # Use a large distance for sky rays to get full scattering
+        # Use a large but finite distance for sky rays to bound shadow sampling
         eff_t = hit_t.copy()
-        eff_t[hit_is_sky] = 1e12
+        eff_t[hit_is_sky] = self.R * 3.0
+
         
-        transmittance, in_scattering = self.get_atmospheric_effects(eff_t, ray_directions)
+        transmittance, in_scattering = self.get_atmospheric_effects(eff_t, ray_directions, time_sec, use_shadows)
         
-        if use_shadows:
-            # Volumetric shadowing for in-scattering
-            # Sample at midpoint of atmosphere
-            cos_theta_z = np.maximum(ray_directions[:, 1], 0.05)
-            sky_sample_p = ray_origin + (self.H_a / (2.0 * cos_theta_z))[:, None] * ray_directions
-            s_sky = self.get_shadow_factor(sky_sample_p, time_sec)
-            # 0.1 ambient sky glow from the rest of the atmosphere (physically based scattering)
-            in_scattering *= (s_sky + 0.1)[:, None]
-            
         # Final blend
-        transmittance_applied = transmittance if use_extinction else np.ones_like(transmittance)
-        scattering_applied = in_scattering if use_scattering else np.zeros_like(in_scattering)
+
+        transmittance_applied = transmittance if use_atmosphere else np.ones_like(transmittance)
+        scattering_applied = in_scattering if use_atmosphere else np.zeros_like(in_scattering)
         
         final_colors = surface_colors * transmittance_applied[:, None] + scattering_applied
         
@@ -279,7 +339,7 @@ class Renderer:
         return np.clip(final_colors, 0.0, 1.0)
 
     def render(self, width=400, height=300, fov=110.0, look_at=np.array([1.0, 0.3, 0.0]), 
-               time_sec=0.0, use_scattering=True, use_extinction=True, 
+               time_sec=0.0, use_atmosphere=True, 
                use_shadows=True, use_ring_shine=True):
         """
         Render a single image of the Ringworld using NumPy vectorization.
@@ -312,7 +372,8 @@ class Renderer:
         # Flatten and shade
         flat_ray_dirs = ray_dirs.reshape(-1, 3)
         ray_origin = np.array([0.0, 0.0, 0.0])
-        colors = self.get_color(ray_origin, flat_ray_dirs, time_sec, use_scattering, 
-                                use_extinction, use_shadows, use_ring_shine)
+        colors = self.get_color(ray_origin, flat_ray_dirs, time_sec, use_atmosphere, 
+                                use_shadows, use_ring_shine)
+
         
         return (colors.reshape(height, width, 3) * 255).astype(np.uint8)

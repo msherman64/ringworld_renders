@@ -11,10 +11,11 @@ def test_ray_length_and_color_atmosphere():
     ray_origin = np.array([0.0, 0.0, 0.0])
     ray_direction_down = np.array([0.0, -1.0, 0.0])
     color_down = renderer.get_color(ray_origin, ray_direction_down, 
-                                  use_scattering=True, use_extinction=True)
+                                  use_atmosphere=True)
     
     # Base green: [0.2, 0.5, 0.2]
-    # Ambient is 0.05, so expected is [0.2, 0.5, 0.2] * 1.05 = [0.21, 0.525, 0.21]
+    # At noon (time_sec=0), s_zenith is 1.0, so ambient is 0.05.
+    # Expected is [0.2, 0.5, 0.2] * (1.0 + 0.05) = [0.21, 0.525, 0.21]
     expected_ground = np.array([0.2, 0.5, 0.2]) * 1.05
     np.testing.assert_allclose(color_down, expected_ground, atol=0.001,
                                err_msg="Foreground ground should not be blue.")
@@ -25,7 +26,8 @@ def test_ray_length_and_color_atmosphere():
     # Looking at +y (zenith) hits the arch way on the other side.
     ray_direction_up = np.array([0.0, 1.0, 0.0])
     color_up = renderer.get_color(ray_origin, ray_direction_up,
-                                use_scattering=True, use_extinction=True)
+                                 use_atmosphere=True)
+
     
     # Distant arch should be much bluer than the base green [0.2, 0.5, 0.2]
     # sky_color is [0.5, 0.7, 1.0]
@@ -143,11 +145,11 @@ def test_default_viewpoint_content():
     bottom_pixel = img[31, 16] 
     assert bottom_pixel[1] > bottom_pixel[0], "Bottom of screen should be green (ground)."
     
-    # Top sector (Sky at high elevation)
-    # The arch rises from the horizon. At 71 deg elevation (top of 110 FOV),
-    # the blue component should be around 15% of 255 (~38).
+    # The arch rises from the horizon. With tau_zenith=0.06, blue Scattering is subtle.
+    # At top of screen, blue component should be non-zero.
     top_pixel = img[0, 16]
-    assert top_pixel[2] > 30, f"Top of screen blue {top_pixel[2]} is too low."
+    assert top_pixel[2] > 10, f"Top of screen blue {top_pixel[2]} is too low."
+
     
     # Middle-Right sector (Horizon/Rising Arch)
     # This is more likely to show the distinct 'blue wall'
@@ -161,28 +163,35 @@ def test_toggles_effects():
     renderer = Renderer()
     origin = np.array([0,0,0])
     
-    # 1. Scattering Toggle
+    # 1. Atmosphere Toggle (Scattering)
     # Look Axial (+Z) - pure sky
     ray_axial = np.array([0.0, 0.0, 1.0])
-    color_scat_off = renderer.get_color(origin, ray_axial, use_scattering=False)
-    assert np.all(color_scat_off == 0), "Sky should be black without scattering"
-    color_scat_on = renderer.get_color(origin, ray_axial, use_scattering=True)
-    assert color_scat_on[2] > 0.05, "Sky should be blue with scattering"
+    color_atmo_off = renderer.get_color(origin, ray_axial, use_atmosphere=False)
+    assert np.all(color_atmo_off == 0), "Sky should be black without atmosphere"
+    color_atmo_on = renderer.get_color(origin, ray_axial, use_atmosphere=True)
+    assert color_atmo_on[2] > 0.05, "Sky should be blue with atmosphere"
     
-    # 2. Extinction Toggle
+    # 2. Atmosphere Toggle (Extinction)
     # Look Spinward (+X) - hits horizon at ~773km
     ray_spin = np.array([1.0, 0.0, 0.0])
-    # Disable scattering/shadows/shine for a clear extinction baseline
-    color_ext_off = renderer.get_color(origin, ray_spin, time_sec=0.0, 
-                                      use_extinction=False, use_scattering=False, 
-                                      use_shadows=False, use_ring_shine=False)
+    # Disable atmospheric effects/shadows/shine for a clear extinction baseline
+    color_atmo_off_g = renderer.get_color(origin, ray_spin, time_sec=0.0, 
+                                          use_atmosphere=False, 
+                                          use_shadows=False, use_ring_shine=False)
     # Mock green [0.2, 0.5, 0.2]
-    assert np.allclose(color_ext_off, [0.2, 0.5, 0.2], atol=0.01)
+    assert np.allclose(color_atmo_off_g, [0.2, 0.5, 0.2], atol=0.01)
     
-    color_ext_on = renderer.get_color(origin, ray_spin, time_sec=0.0, 
-                                     use_extinction=True, use_scattering=False, 
-                                     use_shadows=False, use_ring_shine=False)
-    assert np.sum(color_ext_on) < np.sum(color_ext_off), "Horizon should be dimmed by extinction"
+    color_atmo_on_g = renderer.get_color(origin, ray_spin, time_sec=0.0, 
+                                         use_atmosphere=True, 
+                                         use_shadows=False, use_ring_shine=False)
+    # Atmosphere adds scattering (all channels, especially blue) but extinguishes surface light
+    assert color_atmo_on_g[2] > color_atmo_off_g[2], "Atmosphere should add blue scattering"
+    # The overall color should shift towards sky_color [0.5, 0.7, 1.0]
+    # At the horizon, the color should be much bluer
+    assert color_atmo_on_g[2] > 0.3, "Distant horizon should be hazy blue"
+
+
+
 
     # 3. Ring-shine Toggle (Ground at Noon)
     # Ground at noon with use_shadows=False should be exactly [0.2, 0.5, 0.2] * (1.0 + ambient)
