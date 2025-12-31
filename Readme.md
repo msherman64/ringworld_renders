@@ -4,6 +4,10 @@
 
 This document outlines the design and implementation of a physics engine and renderer capable of accurately simulating the visual experience of standing on a Ringworld—a megastructure with a radius of 1 AU rotating to provide centrifugal gravity.
 
+This is inspired by Larry Niven's "Ringworld" novels, and while we default to the physical parameters described therein, this project does not strictly adhere to them.
+
+![Ringworld Schematic](RingworldSchematic.jpg)
+
 ## 2. Project Motivation & Visual Goals
 
 ### 2.1 Why This Project? (The "Niven" Aesthetic)
