@@ -1,40 +1,82 @@
 import numpy as np
 import functools
+from ringworld_renders import constants
 
 class Renderer:
-    def __init__(self, radius_miles=92955807.0, width_miles=1000000.0, eye_height_miles=0.001242742):
+    def __init__(self, radius_miles=None, width_miles=None, eye_height_miles=None):
         """
         Initialize the Ringworld renderer with physical parameters.
-        """
-        MILES_TO_METERS = 1609.34
         
-        self.R = radius_miles * MILES_TO_METERS
-        self.W = width_miles * MILES_TO_METERS
-        self.h = eye_height_miles * MILES_TO_METERS
+        Coordinate System (Observer-Centric):
+        - Origin (0,0,0): The Observer's position.
+        - Ring Center: Located at (0, R - h, 0).
+        - Y-Axis: "Up" relative to the floor local to the observer (prior to curvature).
+        - R: Ring Radius.
+        - h: Observer height above floor.
+        """
+        # Defaults if not provided
+        r_miles = radius_miles if radius_miles is not None else constants.DEFAULT_RADIUS_MILES
+        w_miles = width_miles if width_miles is not None else constants.DEFAULT_WIDTH_MILES
+        h_miles = eye_height_miles if eye_height_miles is not None else constants.DEFAULT_EYE_HEIGHT_MILES
+        
+        self.R = r_miles * constants.MILES_TO_METERS
+        self.W = w_miles * constants.MILES_TO_METERS
+        self.h = h_miles * constants.MILES_TO_METERS
         
         # Atmosphere parameters (Rayleigh 1/lambda^4 scaling)
-        self.H_a = 100.0 * MILES_TO_METERS # 100 mile Effective Ceiling
-        self.H_scale = 5.3 * MILES_TO_METERS # Scale height for 1G
+        self.H_a = 100.0 * constants.MILES_TO_METERS # 100 mile Effective Ceiling
+        self.H_scale = 5.3 * constants.MILES_TO_METERS # Scale height for 1G
         # Rayleigh spectral scaling relative to blue (450nm): [650nm, 550nm, 450nm]
-        # powers = (450 / [650, 550, 450])^4
         self.tau_zenith = np.array([0.0138, 0.027, 0.06])
         self.sky_color = np.array([0.5, 0.7, 1.0]) # Typical Rayleigh blue
-
-
-        
-        # Sun parameters
-        self.R_sun = 432474.0 * MILES_TO_METERS
-        self.sun_angular_diameter = 0.53 # degrees
         
         # Shadow Square parameters
-        self.N_ss = 8
-        self.R_ss = 36571994.0 * MILES_TO_METERS
-        self.L_ss = 14360000.0 * MILES_TO_METERS
-        self.H_ss = 1200000.0 * MILES_TO_METERS
+        self.N_ss = constants.NUM_SHADOW_SQUARES
+        self.R_ss = constants.SS_RADIUS_METERS
+        self.L_ss = constants.SS_LENGTH_METERS
+        self.H_ss = constants.SS_HEIGHT_METERS
         
         # Observer-centric coordinate system:
         # Ring center is at (0, R - h, 0).
         self.ring_center = np.array([0.0, self.R - self.h, 0.0])
+
+        # Sun parameters
+        self.R_sun = constants.SUN_RADIUS_METERS
+        # Derive angular diameter from geometry
+        # tan(theta/2) = R_sun / (R - R_sun) approx for observer at 0, R_sun at center
+        # Distance to sun center ~ R_sun (No, Sun is at center (0, R-h, 0)).
+        # Distance from observer (0,0,0) to Center (0, R-h, 0) is approx R.
+        dist_to_sun = np.linalg.norm(self.ring_center)
+        self.sun_angular_diameter = 2.0 * np.rad2deg(np.arctan(self.R_sun / dist_to_sun))
+
+    def _solve_quadratic_vectorized(self, a, b, c):
+        """
+        Solve at^2 + bt + c = 0 for vectorized arrays.
+        Returns: t1, t2, valid_mask
+        """
+        discriminant = b**2 - 4.0 * a * c
+        valid_mask = (a > 1e-12) & (discriminant >= 0)
+        
+        t1 = np.full(a.shape, np.inf)
+        t2 = np.full(a.shape, np.inf)
+        
+        if np.any(valid_mask):
+            sqrt_disc = np.sqrt(discriminant[valid_mask])
+            inv_2a = 0.5 / a[valid_mask]
+            t1[valid_mask] = (-b[valid_mask] - sqrt_disc) * inv_2a
+            t2[valid_mask] = (-b[valid_mask] + sqrt_disc) * inv_2a
+            
+        return t1, t2, valid_mask
+    @property
+    def omega_ss(self):
+        """Angular velocity of Shadow Squares (rad/s)."""
+        T_assembly = self.N_ss * constants.SOLAR_DAY_SECONDS
+        return -2.0 * np.pi / T_assembly
+
+    @property
+    def angular_width(self):
+        """Angular width of a single Shadow Square (radians)."""
+        return self.L_ss / self.R_ss
 
     def intersect_ring(self, ray_origin, ray_directions):
         """
@@ -58,15 +100,11 @@ class Renderer:
         b = 2.0 * (ox*dx + oy*dy - dy * R_minus_h)
         c = ox**2 + oy**2 - 2.0 * oy * R_minus_h - h * (2.0 * R - h)
         
-        discriminant = b**2 - 4.0 * a * c
-        valid_mask = (a > 1e-12) & (discriminant >= 0)
+        t1, t2, valid_mask = self._solve_quadratic_vectorized(a, b, c)
         
         t = np.full(ray_directions.shape[0], np.inf)
         
         if np.any(valid_mask):
-            sqrt_disc = np.sqrt(discriminant[valid_mask])
-            t1 = (-b[valid_mask] - sqrt_disc) / (2.0 * a[valid_mask])
-            t2 = (-b[valid_mask] + sqrt_disc) / (2.0 * a[valid_mask])
 
             
             # Select smallest positive t
@@ -77,13 +115,17 @@ class Renderer:
             best_t[m2] = t2[m2]
             
             # Check width
-            hit_z = ray_origin[2] + best_t * ray_directions[valid_mask, 2]
+            # hit_z = ray_origin[2] + best_t * ray_directions[:, 2]
+            # But we must avoid Inf * 0 or similar NaN issues if direction is 0?
+            # best_t is Inf where invalid. 
+            # Inf * 0 is NaN. NaN <= W/2 is False. So it's safe.
+            hit_z = ray_origin[2] + best_t * ray_directions[:, 2]
             width_mask = np.abs(hit_z) <= self.W / 2.0
             
             final_t = np.full(t1.shape, np.inf)
             final_t[width_mask] = best_t[width_mask]
             
-            t[valid_mask] = final_t
+            t = final_t
             
         return t[0] if is_single else t
 
@@ -104,18 +146,15 @@ class Renderer:
         b = 2.0 * np.sum(oc * ray_directions, axis=1)
         c = np.sum(oc**2) - radius**2
         
-        discriminant = b**2 - 4.0 * a * c
-        valid_mask = (a > 1e-12) & (discriminant >= 0)
+        t1, _, valid_mask = self._solve_quadratic_vectorized(a, b, c)
         
         t = np.full(ray_directions.shape[0], np.inf)
         
         if np.any(valid_mask):
-            sqrt_disc = np.sqrt(discriminant[valid_mask])
-            t1 = (-b[valid_mask] - sqrt_disc) / (2.0 * a[valid_mask])
             m = t1 > 1e-6
             t_valid = np.full(t1.shape, np.inf)
             t_valid[m] = t1[m]
-            t[valid_mask] = t_valid
+            t = t_valid
 
             
         return t[0] if is_single else t
@@ -144,15 +183,11 @@ class Renderer:
         b = 2.0 * (ox*dx + (oy - center_y)*dy)
         c = ox**2 + (oy - center_y)**2 - R_ss**2
         
-        discriminant = b**2 - 4.0 * a * c
-        valid_mask = (a > 1e-12) & (discriminant >= 0)
+        t1, t2, valid_mask = self._solve_quadratic_vectorized(a, b, c)
         
         t = np.full(ray_directions.shape[0], np.inf)
         
         if np.any(valid_mask):
-            sqrt_disc = np.sqrt(discriminant[valid_mask])
-            t1 = (-b[valid_mask] - sqrt_disc) / (2.0 * a[valid_mask])
-            t2 = (-b[valid_mask] + sqrt_disc) / (2.0 * a[valid_mask])
             
             # Select smallest positive t
             best_t = np.full(t1.shape, np.inf)
@@ -165,7 +200,7 @@ class Renderer:
             hit_mask = best_t < np.inf
             if np.any(hit_mask):
                 valid_hits = best_t[hit_mask]
-                dirs = ray_directions[valid_mask][hit_mask]
+                dirs = ray_directions[hit_mask]
                 hit_p = ray_origin + valid_hits[:, None] * dirs
                 
                 # Check height (axial width)
@@ -173,18 +208,15 @@ class Renderer:
                 z_check = np.abs(hit_p[:, 2]) <= self.H_ss / 2.0
                 
                 # Check angular position
+                # Check angular position
                 theta = np.arctan2(hit_p[:, 0], -(hit_p[:, 1] - center_y))
                 
-                SOLAR_DAY = 24.0 * 3600.0
-                T_assembly = self.N_ss * SOLAR_DAY
-                omega_ss = -2.0 * np.pi / T_assembly
-                
-                angular_width = self.L_ss / self.R_ss
-                half_width = angular_width / 2.0
+                half_width = self.angular_width / 2.0
+                omega = self.omega_ss
                 
                 in_any_square = np.zeros(hit_p.shape[0], dtype=bool)
                 for i in range(self.N_ss):
-                    ss_center_theta = (i + 0.5) * (2.0 * np.pi / self.N_ss) + omega_ss * time_sec
+                    ss_center_theta = (i + 0.5) * (2.0 * np.pi / self.N_ss) + omega * time_sec
                     d_theta = (theta - ss_center_theta + np.pi) % (2.0 * np.pi) - np.pi
                     in_any_square |= (np.abs(d_theta) <= half_width)
                 
@@ -193,7 +225,7 @@ class Renderer:
                 # Update t[valid_mask]
                 results = np.full(best_t.shape, np.inf)
                 results[hit_mask] = np.where(final_hit_mask, valid_hits, np.inf)
-                t[valid_mask] = results
+                t = results
                 
         return t[0] if is_single else t
 
@@ -211,11 +243,9 @@ class Renderer:
         # Angular position theta
         theta = np.arctan2(hit_points[:, 0], -(hit_points[:, 1] - center_y))
         
-        SOLAR_DAY = 24.0 * 3600.0
-        T_assembly = self.N_ss * SOLAR_DAY
-        omega_ss = -2.0 * np.pi / T_assembly
+        angular_width = self.angular_width
+        omega = self.omega_ss
         
-        angular_width = self.L_ss / self.R_ss
         sigma_rad = np.deg2rad(self.sun_angular_diameter)
         penumbra_width = sigma_rad
         
@@ -227,7 +257,7 @@ class Renderer:
         shadow_factor = np.ones(hit_points.shape[0])
         
         for i in range(self.N_ss):
-            ss_center_theta = (i + 0.5) * (2.0 * np.pi / self.N_ss) + omega_ss * time_sec
+            ss_center_theta = (i + 0.5) * (2.0 * np.pi / self.N_ss) + omega * time_sec
             
             d_theta = (theta - ss_center_theta + np.pi) % (2.0 * np.pi) - np.pi
             abs_d_theta = np.abs(d_theta)
@@ -284,7 +314,7 @@ class Renderer:
                 center_y = self.R - self.h
                 r_sq = hx**2 + (hy - center_y)**2
                 
-                H_w = 1000.0 * 1609.34
+                H_w = 1000.0 * constants.MILES_TO_METERS
                 valid_r = (r_sq <= self.R**2) & (r_sq >= (self.R - H_w)**2)
                 
                 subset_t = t_cand[mask_pos]
@@ -301,7 +331,7 @@ class Renderer:
                 hy = oy + t_sub * dy_s
                 center_y = self.R - self.h
                 r_sq = hx**2 + (hy - center_y)**2
-                H_w = 1000.0 * 1609.34
+                H_w = 1000.0 * constants.MILES_TO_METERS
                 valid_r = (r_sq <= self.R**2) & (r_sq >= (self.R - H_w)**2)
                 
                 subset_t = t_cand[mask_neg]
@@ -326,26 +356,14 @@ class Renderer:
         dx, dy, dz = ray_directions[:, 0], ray_directions[:, 1], ray_directions[:, 2]
         ox, oy, oz = ray_origin
         
-        r_obs = self.h # This was assuming origin=(0,0,0) and looking relatively.
-        # If origin is arbitrary, r_obs is distance from floor? 
-        # NO. The "Atmosphere" is defined relative to the Ring Floor at y = 0 (in local frame).
-        # So "height" h = y coordinate (approx).
-        # Actually in our frame: Center is at (0, R-h, 0).
-        # The floor is at radius R.
-        # Ray origin P = (ox, oy, oz).
-        # Radius r = sqrt(ox^2 + (oy - (R-h))^2).
-        # Height above floor H = R - r.
-        
-        # HOWEVER, the 'flat earth' approximation used here for integration 
-        # assumes h_start = self.h (eye height) and flat scaling.
-        # For full correctness with arbitrary origin, we should compute h_start properly.
-        # But to be minimally invasive while fixing the 'z' clipping, let's stick to 
-        # fixing the geometrical bounds first.
-        
-        # For integration start height:
-        # We assume the camera is at y=0 (eye level). If we move the camera 
-        # significantly in Y, we would need to recalc r_obs.
-        # But the specific bug is about Z-clipping boundaries being wrong if oz != 0.
+        # Calculate starting height relative to Ring Floor for atmospheric density.
+        # Ring Center is at self.ring_center (0, R-h, 0).
+        # Radius r = distance(ray_origin, ring_center)
+        # Height H = R - r
+        yc = self.ring_center[1]
+        dist_sq_from_center_axis = ox**2 + (oy - yc)**2
+        r_start = np.sqrt(dist_sq_from_center_axis)
+        h_start = self.R - r_start
         
         R_minus_h = self.R - self.h
         
@@ -356,9 +374,6 @@ class Renderer:
         # Intersection with cylinder |P(t) - C|^2 = r^2
         # C = (0, R-h)
         # (ox + t*dx)^2 + (oy + t*dy - (R-h))^2 = r^2
-        # Let oy' = oy - (R-h)
-        # (ox + t*dx)^2 + (oy' + t*dy)^2 = r^2
-        # t^2(dx^2+dy^2) + 2t(ox*dx + oy'*dy) + ox^2 + oy'^2 - r^2 = 0
         
         oy_prime = oy - R_minus_h
         a = dx**2 + dy**2
@@ -367,42 +382,22 @@ class Renderer:
         
         # Inner cylinder (R - Ha)
         r_inner = self.R - self.H_a
+        r_inner = self.R - self.H_a
         c_inner = c_term - r_inner**2
-        disc_i = b**2 - 4.0 * a*c_inner
-        mask_i = (a > 1e-12) & (disc_i >= 0)
-        t_i1 = np.full_like(t_hits, np.inf)
-        t_i2 = np.full_like(t_hits, np.inf)
-        if np.any(mask_i):
-            sq_i = np.sqrt(disc_i[mask_i])
-            t_i1[mask_i] = (-b[mask_i] - sq_i) / (2.0 * a[mask_i])
-            t_i2[mask_i] = (-b[mask_i] + sq_i) / (2.0 * a[mask_i])
+        
+        t_i1, t_i2, mask_i = self._solve_quadratic_vectorized(a, b, c_inner)
+        
+        if not np.any(mask_i):
+             t_i1 = np.full_like(t_hits, np.inf)
+             t_i2 = np.full_like(t_hits, np.inf)
 
         # Width boundary (Rim Walls at +/- W/2)
-        # z(t) = oz + t*dz.  Bounds +/- W/2.
-        # t = (+/- W/2 - oz) / dz
-        # We want the positive t that exits the volume.
         
         t_z_exit = np.full_like(t_hits, np.inf)
-        t_z_exit = np.full_like(t_hits, np.inf)
         
-        # We only care about forward intersections (t > 0)
-        # Since we are inside, exactly one of these will be positive for any non-zero dz?
-        # If dz > 0, t_p is positive (assuming oz < W/2). t_n is negative.
-        # If dz < 0, t_n is positive (assuming oz > -W/2). t_p is negative.
-        
-        # So we just take the max? No, max might catch the backwards one if we are outside?
-        # But we assume inside.
-        
-        # Let's use robust selection:
-            # We want min positive t?
-            # If we are inside, there is only one positive t for a line.
-            # If dz=0, both inf.
-             
-            # Using simple branchless for "inside":
-            # t = (W/2 - oz) / dz if dz > 0
-            # t = (-W/2 - oz) / dz if dz < 0
-            
-            # This is equivalent to: abs(W/2 - oz*sgn(dz)) / abs(dz) ? No.
+        # We only care about positive t that exits the volume.
+        # t = (W/2 - oz) / dz if dz > 0
+        # t = (-W/2 - oz) / dz if dz < 0
             
         term = np.zeros_like(dz)
         mask_pos = dz > 1e-12
@@ -410,7 +405,6 @@ class Renderer:
         
         term[mask_pos] = (self.W / 2.0 - oz) / dz[mask_pos]
         term[mask_neg] = (-self.W / 2.0 - oz) / dz[mask_neg]
-        # If dz ~ 0, term stays 0 (but we initialize t_z_exit to inf)
         
         t_z_exit[mask_pos | mask_neg] = term[mask_pos | mask_neg]
 
@@ -454,7 +448,8 @@ class Renderer:
             return term
 
         # NEAR SEGMENT Optical Depth
-        itau = integrated_tau(r_obs, seg_near_end, dy)
+        # Use simple calculated h_start
+        itau = integrated_tau(h_start, seg_near_end, dy)
         tau_near = self.tau_zenith[None, :] * itau[:, None]
         T_near = np.exp(-tau_near)
 
@@ -574,31 +569,20 @@ class Renderer:
                 hits = ray_origin + t_ss[ss_mask][:, None] * valid_dirs
                 
                 center_y = self.R - self.h
-                # theta = atan2(x, -(y-cy))
-                # Note: core logic uses 0=Noon, pi/2=Spinward.
                 theta = np.arctan2(hits[:, 0], -(hits[:, 1] - center_y))
                 
-                SOLAR_DAY = 24.0 * 3600.0
-                T_assembly = self.N_ss * SOLAR_DAY
-                omega_ss = -2.0 * np.pi / T_assembly
-                
-                angular_width = self.L_ss / self.R_ss
-                half_width = angular_width / 2.0
+                omega = self.omega_ss
+                half_width = self.angular_width / 2.0
                 
                 ss_colors_mapped = np.zeros((np.sum(ss_mask), 3))
                 
-                SS_COLORS = [
-                    [1.0, 0.2, 0.2], [0.2, 1.0, 0.2], [0.2, 0.2, 1.0], [1.0, 1.0, 0.2],
-                    [1.0, 0.2, 1.0], [0.2, 1.0, 1.0], [1.0, 0.6, 0.0], [0.6, 0.0, 1.0]
-                ]
-                
                 for i in range(self.N_ss):
-                    ss_center_theta = (i + 0.5) * (2.0 * np.pi / self.N_ss) + omega_ss * time_sec
+                    ss_center_theta = (i + 0.5) * (2.0 * np.pi / self.N_ss) + omega * time_sec
                     d_theta = (theta - ss_center_theta + np.pi) % (2.0 * np.pi) - np.pi
                     
                     # Check if in this square (with tolerance)
                     mask_in_sq = np.abs(d_theta) <= (half_width * 1.5)
-                    col = np.array(SS_COLORS[i % len(SS_COLORS)])
+                    col = np.array(constants.SS_COLORS[i % len(constants.SS_COLORS)])
                     ss_colors_mapped[mask_in_sq] = col
                 
                 surface_colors[ss_mask] = ss_colors_mapped
@@ -619,8 +603,7 @@ class Renderer:
             
             # Dynamic Ring-shine: peaking at midnight (12h) when the arch is overhead.
             # At Noon (0s), the arch is backlit/blocked.
-            SOLAR_DAY = 24.0 * 3600.0
-            time_angle = 2.0 * np.pi * time_sec / SOLAR_DAY
+            time_angle = 2.0 * np.pi * time_sec / constants.SOLAR_DAY_SECONDS
             # Scale from 0.02 (noon) to 0.10 (midnight)
             ambient_shine = 0.06 - 0.04 * np.cos(time_angle) if use_ring_shine else 0.0
             

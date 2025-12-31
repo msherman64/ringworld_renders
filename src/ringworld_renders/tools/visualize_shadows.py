@@ -4,17 +4,7 @@ from matplotlib.patches import Wedge, Polygon
 from io import BytesIO
 import PIL.Image
 
-# Distinct colors for shadow squares (consistent across views)
-SS_COLORS = [
-    [1.0, 0.2, 0.2], # Red
-    [0.2, 1.0, 0.2], # Green
-    [0.2, 0.2, 1.0], # Blue
-    [1.0, 1.0, 0.2], # Yellow
-    [1.0, 0.2, 1.0], # Magenta
-    [0.2, 1.0, 1.0], # Cyan
-    [1.0, 0.6, 0.0], # Orange
-    [0.6, 0.0, 1.0]  # Purple
-]
+from ringworld_renders import constants
 
 def render_system_plot(time_sec, renderer):
     """
@@ -29,13 +19,11 @@ def render_system_plot(time_sec, renderer):
     R = renderer.R
     R_ss = renderer.R_ss
     N_ss = renderer.N_ss
-    L_ss = renderer.L_ss
-    ang_width = L_ss / R_ss
-    ang_width_deg = np.rad2deg(ang_width)
     
-    SOLAR_DAY = 24.0 * 3600.0
-    T_assembly = N_ss * SOLAR_DAY
-    omega_ss = -2.0 * np.pi / T_assembly
+    # Use Renderer Properties
+    ang_width = renderer.angular_width
+    ang_width_deg = np.rad2deg(ang_width)
+    omega_ss = renderer.omega_ss
     
     # Setup plot
     ax.set_title("System View (Top-Down)")
@@ -58,7 +46,7 @@ def render_system_plot(time_sec, renderer):
         t1 = w_theta - ang_width_deg/2
         t2 = w_theta + ang_width_deg/2
         
-        col = SS_COLORS[i % len(SS_COLORS)]
+        col = constants.SS_COLORS[i % len(constants.SS_COLORS)]
         
         # Shadow Square itself (Centered at (0,0))
         wedge = Wedge((0, 0), R_ss, t1, t2, width=3e6*1609, color=col, alpha=0.8)
