@@ -17,7 +17,7 @@ This codebase was initially LLM-generated but designed for human validation and 
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd ringworld-renders
+cd ringworld_renders
 
 # Install dependencies
 uv sync
@@ -90,10 +90,9 @@ uv run pytest --cov=src/ringworld_renders
 ### Architecture
 ```
 src/ringworld_renders/
-├── core.py          # Main Renderer class (orchestration)
+├── core.py          # Main Renderer class (orchestration, atmospheric effects)
 ├── intersections.py # Ray-geometry intersection calculations
 ├── shadows.py       # Shadow square physics and rendering
-├── atmosphere.py    # Atmospheric scattering and optics
 ├── constants.py     # Physical constants and configuration
 └── ui.py           # Gradio interface
 ```
@@ -147,36 +146,29 @@ src/ringworld_renders/
 
 ## Architecture Overview
 
-### Core Components
+For detailed architecture information, see:
+- **[Architecture](docs/ARCHITECTURE.md)** - System design, components, and data flow
+- **[Technical Design](docs/TECHNICAL_DESIGN.md)** - Complete technical specifications
+- **[Physics Reference](docs/PHYSICS_REFERENCE.md)** - Physical parameters and equations
 
-**Renderer**: Main orchestration class
-- Manages physical parameters
-- Coordinates intersection → shading → atmosphere pipeline
-- Handles camera transforms and rendering
+### Quick Reference
 
-**Physics Modules**:
-- **Intersections**: Ray-cylinder, ray-sphere, shadow square intersections
-- **Shadows**: Angular shadow calculations, penumbra softening
-- **Atmosphere**: Rayleigh scattering, Beer-Lambert extinction
+**Core Components**:
+- **Renderer** (`core.py`): Main orchestration class, atmospheric effects
+- **Intersections** (`intersections.py`): Ray-geometry intersections
+- **Shadows** (`shadows.py`): Shadow square physics
 
-### Key Design Decisions
-
-1. **Observer-centric coordinates**: Prevents floating-point precision loss at astronomical scales
-2. **Batch-first architecture**: All physics expects 2D arrays, convenience at API boundaries
-3. **Delta-R solver**: Specialized quadratic formula to prevent catastrophic cancellation
-4. **Modular physics**: Each phenomenon (shadows, atmosphere) isolated for testing/validation
-
-### Coordinate Systems
-
-- **Rendering**: Observer at (0,0,0), looking toward +Y (arch), +X (horizon)
-- **Physics**: Ring center at (0, R-h, 0), cylinders/spheres relative to this
-- **Shadow calculations**: Angular positions in ring coordinate system
+**Key Design Decisions**:
+1. Observer-centric coordinates (prevents floating-point precision loss)
+2. Batch-first architecture (vectorized NumPy operations)
+3. Delta-R solver (prevents catastrophic cancellation)
+4. Modular physics (isolated for testing/validation)
 
 ## Getting Help
 
 ### Resources
-- **README.md**: Project overview and technical design
-- **docs/**: Detailed technical documentation
+- **[README.md](README.md)**: Project overview and quick start
+- **[docs/](docs/)**: Detailed technical documentation
 - **tests/**: Working examples of all major features
 
 ### Communication
