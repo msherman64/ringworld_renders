@@ -1,3 +1,6 @@
+note!! this repo is significantly llm generated, although with careful prompting. the end goal is to be both visually interesting, and to have sufficiently modular, testable code, lending itself to manual validation and modification as a learning exercise.
+
+
 # Ringworld Physics Engine: Technical Design Document
 
 ## 1. Introduction
