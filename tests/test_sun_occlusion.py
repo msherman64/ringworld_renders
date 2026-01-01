@@ -13,8 +13,8 @@ def test_sun_occlusion_at_midnight():
     ray_up = np.array([0.0, 1.0, 0.0])
     
     # Check intersection distances
-    t_ss = renderer.intersect_shadow_squares(ray_origin, ray_up, time_midnight)
-    t_sun = renderer.intersect_sun(ray_origin, ray_up)
+    t_ss = renderer.intersector.intersect_shadow_squares(ray_origin, ray_up, time_midnight, renderer.shadows)
+    t_sun = renderer.intersector.intersect_sun(ray_origin, ray_up)
     
     assert t_ss < t_sun, f"Shadow square hit ({t_ss}) should be closer than sun ({t_sun}) at midnight."
     assert t_ss < np.inf, "Should hit a shadow square at midnight."
@@ -42,8 +42,8 @@ def test_sun_visible_between_squares():
     ray_origin = np.array([0.0, 0.0, 0.0])
     ray_up = np.array([0.0, 1.0, 0.0])
     
-    t_ss = renderer.intersect_shadow_squares(ray_origin, ray_up, time_noon)
-    t_sun = renderer.intersect_sun(ray_origin, ray_up)
+    t_ss = renderer.intersector.intersect_shadow_squares(ray_origin, ray_up, time_noon, renderer.shadows)
+    t_sun = renderer.intersector.intersect_sun(ray_origin, ray_up)
     
     assert t_ss == np.inf, "Should NOT hit a shadow square at noon."
     assert t_sun < np.inf, "Should hit the sun at noon."

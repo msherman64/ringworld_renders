@@ -101,33 +101,7 @@ def create_ui():
                 input_comp.change(fn=render_frame, inputs=inputs, outputs=outputs, 
                                  trigger_mode="always_last", show_progress="hidden")
         
-        # Animation Loop
-        # We use a recursive function or Interval?
-        # Gradio events are tricky for infinite loops.
-        # We can use `demo.load` with `every` IF we update the component.
-        # Or a generator.
-        
-        def animate(is_animating, current_time):
-            if is_animating:
-                new_time = (current_time + 0.1) % 24
-                return new_time
-            return current_time
-
-        # Timer trigger?
-        # Use gr.Timer if available in newer gradio, or just chained events.
-        # Simple recursion: when timer changes, if animate is True, update time.
-        
-        # Let's try chained event:
-        # Checkbox change -> triggers function?
-        # We want to continuously update `time_slider`.
-        
-        # Using a generator for the output image is standard for animation, but here we want to update the slider too?
-        # Simpler: The Checkbox toggles a periodic event.
-        
-        # Hack: Use a hidden component to debounce/trigger.
-        # Actually, let's just make the user manually drag for now IF animation is hard.
-        # But User requested "toggle to animate".
-        # We'll use a generator on the button click?
+        # Animation loop using generator for continuous time updates
         
         def cycle_animation(is_animating, current_time):
             while is_animating:

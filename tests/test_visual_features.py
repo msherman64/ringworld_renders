@@ -14,7 +14,7 @@ def test_geometry_precision_deltar():
     ray_origin = np.array([0.0, 0.0, 0.0])
     ray_direction = np.array([0.0, -1.0, 0.0])
     
-    t = renderer.intersect_ring(ray_origin, ray_direction)
+    t = renderer.intersector.intersect_ring(ray_origin, ray_direction)
     # The expected intersection is at distance h (the distance to the floor).
     # We use a slightly looser tolerance to account for the MILES_TO_METERS constant used.
     assert t == pytest.approx(h_meters, rel=1e-5), f"Expected distance {h_meters}, got {t}"
@@ -36,7 +36,7 @@ def test_upward_horizon_validation():
     directions[:, 0] = np.cos(theta) # Forward
     directions[:, 1] = np.sin(theta) # Up
     
-    t = renderer.intersect_ring(np.array([0,0,0]), directions)
+    t = renderer.intersector.intersect_ring(np.array([0,0,0]), directions)
     
     # Print distances for manual verification in test output
     print("\nUpward Horizon Distances (miles):")

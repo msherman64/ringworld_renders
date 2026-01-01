@@ -49,7 +49,7 @@ def test_sunset_duration_physical():
     sunset_end_s = None
     for s_offset in range(0, 3600, 30):
         t_sec = (6 * 3600) + (s_offset - 1800)
-        s = renderer.get_shadow_factor(hit_p, t_sec)
+        s = renderer.shadows.get_shadow_factor(hit_p, t_sec)
         if sunset_start_s is None and s < 0.999:
             sunset_start_s = t_sec
         if sunset_start_s is not None and sunset_end_s is None and s < 0.001:
@@ -106,17 +106,17 @@ def test_coordinate_system_physical():
     h = renderer.h
     
     # 1. Horizon Check
-    t_horiz = renderer.intersect_ring(np.array([0,0,0]), np.array([1, 0, 0]))
+    t_horiz = renderer.intersector.intersect_ring(np.array([0,0,0]), np.array([1, 0, 0]))
     expected_horizon = np.sqrt(2 * R * h - h**2)
     assert np.allclose(t_horiz, expected_horizon, rtol=1e-3)
     
     # 2. Zenith Check (Far Side Arch)
-    t_arch = renderer.intersect_ring(np.array([0,0,0]), np.array([0, 1, 0]))
+    t_arch = renderer.intersector.intersect_ring(np.array([0,0,0]), np.array([0, 1, 0]))
     expected_arch = 2 * R - h
     assert np.allclose(t_arch, expected_arch, rtol=1e-5)
     
     # 3. Sun Check (Surface)
-    t_sun = renderer.intersect_sun(np.array([0,0,0]), np.array([0, 1, 0]))
+    t_sun = renderer.intersector.intersect_sun(np.array([0,0,0]), np.array([0, 1, 0]))
     expected_sun_surface = (R - h) - renderer.R_sun
     assert np.allclose(t_sun, expected_sun_surface, rtol=1e-5)
 

@@ -5,6 +5,8 @@ from io import BytesIO
 import PIL.Image
 
 from ringworld_renders import constants
+from ringworld_renders.shadows import omega_ss, angular_width
+from ringworld_renders.core import Renderer
 
 def render_system_plot(time_sec, renderer):
     """
@@ -20,10 +22,10 @@ def render_system_plot(time_sec, renderer):
     R_ss = renderer.R_ss
     N_ss = renderer.N_ss
     
-    # Use Renderer Properties
-    ang_width = renderer.angular_width
+    # Use shadow calculation functions
+    ang_width = angular_width(renderer.L_ss, renderer.R_ss)
     ang_width_deg = np.rad2deg(ang_width)
-    omega_ss = renderer.omega_ss
+    omega_ss_val = omega_ss(renderer.N_ss)
     
     # Setup plot
     ax.set_title("System View (Top-Down)")
@@ -37,7 +39,7 @@ def render_system_plot(time_sec, renderer):
     
     # 2. Shadow Squares & Shadows
     for i in range(N_ss):
-        theta_center = (i + 0.5) * (2.0 * np.pi / N_ss) + omega_ss * time_sec
+        theta_center = (i + 0.5) * (2.0 * np.pi / N_ss) + omega_ss_val * time_sec
         theta_deg = np.rad2deg(theta_center)
         
         # Map theta to matplotlib Wedge (South aligned)
@@ -49,7 +51,7 @@ def render_system_plot(time_sec, renderer):
         col = constants.SS_COLORS[i % len(constants.SS_COLORS)]
         
         # Shadow Square itself (Centered at (0,0))
-        wedge = Wedge((0, 0), R_ss, t1, t2, width=3e6*1609, color=col, alpha=0.8)
+        wedge = Wedge((0, 0), R_ss, t1, t2, width=3e6 * constants.MILES_TO_METERS, color=col, alpha=0.8)
         ax.add_patch(wedge)
         
         # Projected Shadow on Ring (Penumbra/Umbra simplfied)
@@ -140,3 +142,19 @@ def render_system_plot(time_sec, renderer):
     plt.close(fig)
     buf.seek(0)
     return PIL.Image.open(buf)
+
+
+def create_visualization():
+    """Entry point for ringworld-visualize command."""
+    print("Launching Shadow Visualization Tool...")
+    # For now, create a simple interactive plot
+    # TODO: Implement full interactive visualization
+    renderer = Renderer()
+
+    # Create a sample plot at noon
+    img = render_system_plot(0.0, renderer)
+
+    # Display the plot
+    img.show()
+
+    print("Visualization created. Close the image window to exit.")

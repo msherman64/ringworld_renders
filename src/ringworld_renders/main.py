@@ -53,40 +53,44 @@ def run_physical_verification(renderer):
 
 def main():
     parser = argparse.ArgumentParser(description="Ringworld Renderer CLI")
-    parser.add_argument("--ui", action="store_true", help="Launch the interactive Gradio UI")
-    parser.add_argument("--samples", action="store_true", help="Generate production-quality 1024x1024 samples")
-    parser.add_argument("--verify", action="store_true", help="Run physical consistency checks")
-    parser.add_argument("--res", type=int, default=1024, help="Resolution for sample generation")
-    
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # UI command
+    ui_parser = subparsers.add_parser("ui", help="Launch the interactive Gradio UI")
+    ui_parser.set_defaults(func=lambda args, renderer: launch_ui())
+
+    # Samples command
+    samples_parser = subparsers.add_parser("samples", help="Generate production-quality samples")
+    samples_parser.add_argument("--res", type=int, default=1024, help="Resolution for sample generation")
+    samples_parser.set_defaults(func=lambda args, renderer: generate_samples(renderer, args.res))
+
+    # Verify command
+    verify_parser = subparsers.add_parser("verify", help="Run physical consistency checks")
+    verify_parser.set_defaults(func=lambda args, renderer: run_physical_verification(renderer))
+
+    # Visualize command
+    visualize_parser = subparsers.add_parser("visualize", help="Launch the shadow visualization tool")
+    visualize_parser.set_defaults(func=lambda args, renderer: launch_visualization())
+
     args = parser.parse_args()
-    renderer = Renderer()
 
-    if args.ui:
-        print("Launching UI...")
-        demo = create_ui()
-        demo.launch(css=CSS)
-
-    elif args.samples:
-        generate_samples(renderer, args.res)
-    elif args.verify:
-        run_physical_verification(renderer)
-    else:
+    if args.command is None:
         parser.print_help()
+        return
 
-def run_ui():
-    """Entry point for ringworld-ui command."""
-    sys.argv = [sys.argv[0], "--ui"]
-    main()
+    renderer = Renderer()
+    args.func(args, renderer)
 
-def run_verify():
-    """Entry point for ringworld-verify command."""
-    sys.argv = [sys.argv[0], "--verify"]
-    main()
+def launch_ui():
+    """Launch the interactive Gradio UI."""
+    print("Launching UI...")
+    demo = create_ui()
+    demo.launch(css=CSS)
 
-def run_samples():
-    """Entry point for ringworld-samples command."""
-    sys.argv = [sys.argv[0], "--samples"]
-    main()
+def launch_visualization():
+    """Launch the shadow visualization tool."""
+    from ringworld_renders.tools.visualize_shadows import create_visualization
+    create_visualization()
 
 if __name__ == "__main__":
     main()

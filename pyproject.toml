@@ -13,11 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-ringworld-render = "ringworld_renders.ui:main"
-ringworld-visualize = "ringworld_renders.tools.visualize_shadows:create_visualization"
-ringworld-ui = "ringworld_renders.main:run_ui"
-ringworld-verify = "ringworld_renders.main:run_verify"
-ringworld-samples = "ringworld_renders.main:run_samples"
+ringworld = "ringworld_renders.main:main"
 
 [build-system]
 requires = ["hatchling"]
