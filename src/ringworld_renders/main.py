@@ -133,75 +133,30 @@ def run_samples():
 def launch_visualization():
     """Launch standalone shadow square visualization."""
     import matplotlib.pyplot as plt
-    import matplotlib.animation as animation
-    from ringworld_renders.tools.visualize_shadows import render_system_plot
+    from ringworld_renders.tools.visualize_shadows import create_system_animation
 
     print("Launching Shadow Square Visualization...")
     print("Close the window to exit.")
 
     renderer = Renderer()
-    R = renderer.R
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 10))
-    ax.set_title("Ringworld Shadow Square System (Animated)")
-    ax.set_aspect('equal')
-    ax.set_xlim(-1.1*R, 1.1*R)
-    ax.set_ylim(-1.1*R, 1.1*R)
-    ax.set_xlabel("X Position (miles)")
-    ax.set_ylabel("Y Position (miles)")
-
-    # Plot the static ring
-    ring_circle = plt.Circle((0, 0), R, color='green', fill=False, linewidth=2, label='Ringworld')
-    ax.add_patch(ring_circle)
-
-    # Add text for time
-    time_text = ax.text(0.02, 0.98, '', transform=ax.transAxes, fontsize=12,
-                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-
-    # Animation parameters
-    fps = 10
-    total_duration_hours = 24
-    total_frames = fps * total_duration_hours * 3600 // 3600  # 1 frame per hour
-
-    def animate(frame):
-        # Calculate time in seconds (1 frame = 1 hour)
-        time_sec = frame * 3600
-        hours = time_sec / 3600
-
-        # Clear previous shadow squares
-        for patch in ax.patches[:]:
-            if patch != ring_circle:  # Keep the ring
-                patch.remove()
-
-        # Get system plot for this time
-        system_img = render_system_plot(time_sec, renderer)
-
-        # Convert PIL image to matplotlib
-        import matplotlib.image as mpimg
-        from io import BytesIO
-
-        buf = BytesIO()
-        system_img.save(buf, format='png')
-        buf.seek(0)
-        img_array = mpimg.imread(buf)
-
-        # Display the system plot
-        ax.imshow(img_array, extent=[-1.1*R, 1.1*R, -1.1*R, 1.1*R], alpha=0.7, zorder=1)
-
-        # Update time text
-        time_text.set_text('.1f')
-
-        return []
-
-    # Create animation
-    anim = animation.FuncAnimation(fig, animate, frames=total_frames,
-                                 interval=1000//fps, blit=False, repeat=True)
+    # Create the animated system view
+    fig, anim = create_system_animation(renderer, fov=95.0, yaw=0.0, pitch=45.0, duration_hours=240, fps=20)
 
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.show()
+
+    print("Starting animation display...")
+
+    try:
+        plt.show()
+    except KeyboardInterrupt:
+        print("Animation interrupted by user")
+    except Exception as e:
+        print(f"Animation display error: {e}")
+    finally:
+        plt.close()
 
 if __name__ == "__main__":
     main()
