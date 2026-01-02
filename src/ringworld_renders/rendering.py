@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 from enum import Enum
 from ringworld_renders import constants
+from ringworld_renders.intersections import solve_quadratic_vectorized
 
 
 class HitType(Enum):
@@ -174,11 +175,11 @@ class MaterialSystem:
                 center_y = self.renderer.center_y
                 theta = np.arctan2(valid_hits[:, 0], -(valid_hits[:, 1] - center_y))
 
-                omega = self.renderer.omega_ss
-                half_width = self.renderer.angular_width / 2.0
+                omega = self.renderer.shadow_model.omega_ss
+                half_width = self.renderer.shadow_model.angular_width / 2.0
 
                 ss_colors = np.zeros((np.sum(ss_mask), 3))
-                for i in range(self.renderer.N_ss):
+                for i in range(self.renderer.shadow_model.N_ss):
                     ss_center_theta = (i + 0.5) * (2.0 * np.pi / self.renderer.N_ss) + omega * time_sec
                     d_theta = (theta - ss_center_theta + np.pi) % (2.0 * np.pi) - np.pi
 
@@ -283,7 +284,7 @@ class AtmosphericModel:
         r_inner = self.renderer.R - self.H_a
         c_inner = c_term - r_inner**2
 
-        t_i1, t_i2, mask_i = self.renderer._solve_quadratic_vectorized(a, b, c_inner)
+        t_i1, t_i2, mask_i = solve_quadratic_vectorized(a, b, c_inner)
 
         if not np.any(mask_i):
              t_i1 = np.full_like(t_hits, np.inf)
