@@ -27,7 +27,7 @@ class ShadowModel:
     and angular relationships.
     """
 
-    def __init__(self, N_ss=None, R_ss=None, L_ss=None):
+    def __init__(self, N_ss=None, R_ss=None, L_ss=None, center_y=None):
         """
         Initialize the shadow model.
 
@@ -35,10 +35,12 @@ class ShadowModel:
             N_ss: Number of shadow squares (default: constants.NUM_SHADOW_SQUARES)
             R_ss: Shadow square orbital radius in meters (default: constants.SS_RADIUS_METERS)
             L_ss: Shadow square length in meters (default: constants.SS_LENGTH_METERS)
+            center_y: Y coordinate of ring center in observer-centric coordinates
         """
         self.N_ss = N_ss if N_ss is not None else constants.NUM_SHADOW_SQUARES
         self.R_ss = R_ss if R_ss is not None else constants.SS_RADIUS_METERS
         self.L_ss = L_ss if L_ss is not None else constants.SS_LENGTH_METERS
+        self.center_y = center_y  # Ring center Y coordinate in observer-centric frame
 
         # Pre-compute derived values
         self.omega_ss_val = omega_ss(self.N_ss)
@@ -49,7 +51,7 @@ class ShadowModel:
         Vectorized shadow factor calculation for given positions and time.
 
         Args:
-            positions: Nx3 array of (x,y,z) positions on the ring
+            positions: Nx3 array of (x,y,z) positions on the ring in observer-centric coordinates
             time_sec: Current time in seconds
 
         Returns:
@@ -61,8 +63,9 @@ class ShadowModel:
             return np.array([])
 
         # Calculate angular position of each point on the ring
-        # theta = atan2(x, -y) maps to the ring's angular coordinate
-        theta_points = np.arctan2(positions[:, 0], -positions[:, 1])
+        # In observer-centric coordinates: theta = atan2(x, -(y - center_y))
+        # This gives the angle relative to the line from ring center to observer
+        theta_points = np.arctan2(positions[:, 0], -(positions[:, 1] - self.center_y))
 
         # Calculate shadow factors
         shadow_factors = np.ones(len(positions), dtype=float)

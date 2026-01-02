@@ -53,7 +53,7 @@ class Renderer:
         self.sun_angular_diameter = 2.0 * np.rad2deg(np.arctan(self.R_sun / dist_to_sun))
 
         # Initialize shadow model
-        self.shadows = ShadowModel(self.N_ss, self.R_ss, self.L_ss)
+        self.shadows = ShadowModel(self.N_ss, self.R_ss, self.L_ss, self.center_y)
 
         # Initialize intersector
         self.intersector = Intersector(
