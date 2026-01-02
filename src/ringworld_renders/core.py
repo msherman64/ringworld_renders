@@ -1,6 +1,7 @@
 import numpy as np
 import functools
 from ringworld_renders import constants
+from ringworld_renders.rendering import HitSelector, MaterialSystem, AtmosphericModel
 
 class Renderer:
     def __init__(self, radius_miles=None, width_miles=None, eye_height_miles=None):
@@ -49,6 +50,11 @@ class Renderer:
         # Distance from observer (0,0,0) to Center (0, R-h, 0) is approx R.
         dist_to_sun = np.linalg.norm(self.ring_center)
         self.sun_angular_diameter = 2.0 * np.rad2deg(np.arctan(self.R_sun / dist_to_sun))
+
+        # Rendering pipeline components
+        self.hit_selector = HitSelector(self)
+        self.material_system = MaterialSystem(self)
+        self.atmospheric_model = AtmosphericModel(self)
 
     def _solve_quadratic_vectorized(self, a, b, c):
         """
@@ -516,116 +522,41 @@ class Renderer:
 
 
 
-    def get_color(self, ray_origin, ray_directions, time_sec=0.0, 
+    def get_color(self, ray_origin, ray_directions, time_sec=0.0,
                   use_atmosphere=True, use_shadows=True, use_ring_shine=True,
                   debug_shadow_squares=False):
         """
-        Calculate the color for each ray.
+        Calculate the color for each ray using the rendering pipeline.
         vectorized for N rays.
         """
         is_single = ray_directions.ndim == 1
         if is_single:
             ray_directions = ray_directions[None, :]
-        num_rays = ray_directions.shape[0]
-        
-        # 0. Intersections
-        # Note: intersect_sun uses sphere logic. Not quite physically perfectly aligned with shadow squares?
-        # But for this purpose, it works.
-        
-        t_sun = self.intersect_sun(ray_origin, ray_directions)
-        t_ring = self.intersect_ring(ray_origin, ray_directions)
-        t_wall = self.intersect_rim_walls(ray_origin, ray_directions)
-        t_ss = self.intersect_shadow_squares(ray_origin, ray_directions, time_sec) if use_shadows or debug_shadow_squares else np.full(num_rays, np.inf)
-        
-        # Primary hit logic
-        hit_t = np.minimum(t_sun, np.minimum(t_ring, np.minimum(t_ss, t_wall)))
-        hit_is_sun = (t_sun <= hit_t) & (t_sun < np.inf)
-        hit_is_ring = (t_ring <= hit_t) & (t_ring < np.inf) & ~hit_is_sun
-        hit_is_wall = (t_wall <= hit_t) & (t_wall < np.inf) & ~hit_is_sun & ~hit_is_ring
-        hit_is_ss = (t_ss <= hit_t) & (t_ss < np.inf) & ~hit_is_sun & ~hit_is_ring & ~hit_is_wall
-        hit_is_sky = hit_t == np.inf
-        
-        surface_colors = np.zeros((num_rays, 3))
-        
-        # 1. Sun Color
-        sun_mask = hit_is_sun
-        if np.any(sun_mask):
-            # Sun is an emitter; in a unified geometric model, if we hit the sun, 
-            # we are by definition not occluded by a shadow square (because t_ss > t_sun).
-            surface_colors[sun_mask] = np.array([1.0, 1.0, 0.8])
-            
-        # 2. Shadow Square Color (Occlusion)
-        ss_mask = hit_is_ss
-        if np.any(ss_mask):
-            if debug_shadow_squares:
-                # False Colors
-                valid_dirs = ray_directions[ss_mask]
-                hits = ray_origin + t_ss[ss_mask][:, None] * valid_dirs
-                
-                center_y = self.center_y
-                theta = np.arctan2(hits[:, 0], -(hits[:, 1] - center_y))
-                
-                omega = self.omega_ss
-                half_width = self.angular_width / 2.0
-                
-                ss_colors_mapped = np.zeros((np.sum(ss_mask), 3))
-                
-                for i in range(self.N_ss):
-                    ss_center_theta = (i + 0.5) * (2.0 * np.pi / self.N_ss) + omega * time_sec
-                    d_theta = (theta - ss_center_theta + np.pi) % (2.0 * np.pi) - np.pi
-                    
-                    # Check if in this square (with tolerance)
-                    mask_in_sq = np.abs(d_theta) <= (half_width * 1.5)
-                    col = np.array(constants.SS_COLORS[i % len(constants.SS_COLORS)])
-                    ss_colors_mapped[mask_in_sq] = col
-                
-                surface_colors[ss_mask] = ss_colors_mapped
-            else:
-                # Shadow squares are opaque and black (back side)
-                surface_colors[ss_mask] = np.array([0.0, 0.0, 0.0])
-            
-        # 3. Rim Wall Color
-        wall_mask = hit_is_wall
-        if np.any(wall_mask):
-            # Dark grey rock
-            surface_colors[wall_mask] = np.array([0.1, 0.1, 0.15])
-            
-        # 3. Ring Color
-        ring_mask = hit_is_ring
-        if np.any(ring_mask):
-            hit_p = ray_origin + t_ring[ring_mask][:, None] * ray_directions[ring_mask]
-            
-            # Dynamic Ring-shine: peaking at midnight (12h) when the arch is overhead.
-            # At Noon (0s), the arch is backlit/blocked.
-            time_angle = 2.0 * np.pi * time_sec / constants.SOLAR_DAY_SECONDS
-            # Scale from 0.02 (noon) to 0.10 (midnight)
-            ambient_shine = 0.06 - 0.04 * np.cos(time_angle) if use_ring_shine else 0.0
-            
-            s_factor = self.get_shadow_factor(hit_p, time_sec) if use_shadows else 1.0
-            s_factor = np.atleast_1d(s_factor)
-            
-            # Mock green surface with physical light interaction
-            surface_colors[ring_mask] = np.array([0.2, 0.5, 0.2]) * (s_factor + ambient_shine)[:, None]
 
+        # Stage 1: Intersection → HitResult
+        hits = self.hit_selector.select_primary(ray_origin, ray_directions, time_sec)
 
-            
-        # 3. Atmospheric Effects
-        # We process ALL rays (including sky)
-        # Use a large but finite distance for sky rays to bound shadow sampling
-        eff_t = hit_t.copy()
-        eff_t[hit_is_sky] = self.R * 3.0
+        # Stage 2: HitResult → SurfaceColor
+        surface_colors = self.material_system.get_surface_color(
+            hits, time_sec, use_shadows, use_ring_shine, debug_shadow_squares
+        )
 
-        
-        transmittance, in_scattering = self.get_atmospheric_effects(eff_t, ray_origin, ray_directions, time_sec, use_shadows)
-        
-        # Final blend
+        # Stage 3: Ray + HitResult → Atmospheric Effects
+        # Use large distance for sky rays to bound atmospheric sampling
+        eff_t = hits.distance.copy()
+        sky_mask = hits.hit_type == "sky"
+        eff_t[sky_mask] = self.R * 3.0
 
+        transmittance, in_scattering = self.atmospheric_model.get_atmospheric_effects(
+            eff_t, ray_origin, ray_directions, time_sec, use_shadows
+        )
+
+        # Stage 4: Composition
         transmittance_applied = transmittance if use_atmosphere else np.ones_like(transmittance)
         scattering_applied = in_scattering if use_atmosphere else np.zeros_like(in_scattering)
-        
+
         final_colors = surface_colors * transmittance_applied + scattering_applied
 
-        
         if is_single:
             return np.clip(final_colors[0], 0.0, 1.0)
         return np.clip(final_colors, 0.0, 1.0)
